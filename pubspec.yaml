@@ -36,6 +36,7 @@ flutter:
     - assets/pet/
     - assets/kanana-notice.txt
     - assets/apache-2.0.txt
+    - shorebird.yaml
 
 hooks:
   user_defines:

@@ -7,6 +7,14 @@ on:
         description: Upload to Donglgewi's internal TestFlight after validating the archive
         type: boolean
         default: false
+      code_push:
+        description: Build a Shorebird release for TestFlight
+        type: boolean
+        default: true
+      patch_release:
+        description: Publish a patch to the exact internal release, for example 0.1.0+3
+        type: string
+        required: false
 
 permissions:
   contents: read
@@ -26,17 +34,34 @@ jobs:
         run: |
           git clone --depth 1 --branch 3.50.1 https://github.com/flutter/flutter.git "$RUNNER_TEMP/flutter"
           echo "$RUNNER_TEMP/flutter/bin" >> "$GITHUB_PATH"
-      - name: Check and build iOS archive
+      - name: Check Flutter code
         run: |
           flutter pub get --enforce-lockfile
           flutter analyze --no-pub
           flutter test --no-pub
-          flutter build ipa --release --no-codesign --no-pub --build-number="$GITHUB_RUN_NUMBER"
+      - name: Set up Shorebird
+        if: inputs.code_push || inputs.patch_release != ''
+        uses: shorebirdtech/setup-shorebird@v1
+        with:
+          cache: true
+      - name: Create Shorebird release and iOS archive
+        if: inputs.code_push && inputs.patch_release == ''
+        env:
+          SHOREBIRD_TOKEN: ${{ secrets.SHOREBIRD_TOKEN }}
+        run: |
+          test -n "$SHOREBIRD_TOKEN"
+          shorebird release ios --flutter-version=3.50.0 --no-codesign --build-number="$GITHUB_RUN_NUMBER"
+      - name: Build standard iOS archive
+        if: ${{ !inputs.code_push && inputs.patch_release == '' }}
+        run: flutter build ipa --release --no-codesign --no-pub --build-number="$GITHUB_RUN_NUMBER"
+      - name: Verify archive identity
+        if: inputs.patch_release == ''
+        run: |
           archive="$PWD/build/ios/archive/Runner.xcarchive"
           test "$(/usr/libexec/PlistBuddy -c 'Print :ApplicationProperties:CFBundleIdentifier' "$archive/Info.plist")" = com.jordonpark.donglgewi
           test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleDisplayName' "$archive/Products/Applications/Runner.app/Info.plist")" = 동글귀
       - name: Sign and upload the internal beta
-        if: inputs.upload && github.ref == 'refs/heads/main'
+        if: inputs.upload && inputs.patch_release == '' && github.ref == 'refs/heads/main'
         env:
           APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
           ASC_KEY_ID: ${{ vars.ASC_KEY_ID }}
@@ -65,3 +90,15 @@ jobs:
             -exportPath "$scratch/export" -exportOptionsPlist "$options" \
             -allowProvisioningUpdates -authenticationKeyPath "$key" \
             -authenticationKeyID "$ASC_KEY_ID" -authenticationKeyIssuerID "$ASC_ISSUER_ID"
+      - name: Publish patch to the TestFlight release
+        if: inputs.patch_release != '' && github.ref == 'refs/heads/main'
+        env:
+          SHOREBIRD_TOKEN: ${{ secrets.SHOREBIRD_TOKEN }}
+          RELEASE_VERSION: ${{ inputs.patch_release }}
+        run: |
+          test -n "$SHOREBIRD_TOKEN"
+          if [[ ! "$RELEASE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+\+[0-9]+$ ]]; then
+            echo '::error::Enter the exact TestFlight release version and build number.'
+            exit 1
+          fi
+          shorebird patch ios --release-version="$RELEASE_VERSION" --track=stable --no-codesign
