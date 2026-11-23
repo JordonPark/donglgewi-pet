@@ -8,7 +8,8 @@ import 'package:flutter/foundation.dart'
         LicenseEntryWithLineBreaks,
         LicenseRegistry,
         defaultTargetPlatform,
-        kIsWeb;
+        kIsWeb,
+        mapEquals;
 import 'package:flutter/services.dart'
     show MethodChannel, MissingPluginException, PlatformException, rootBundle;
 import 'package:image_picker/image_picker.dart';
@@ -97,7 +98,8 @@ class _PetRoomState extends State<PetRoom> with SingleTickerProviderStateMixin {
   double? _download;
   String _bubble = '안녕! 우리 방에 온 걸 환영해.';
   String _storageError = '';
-  String? _toolbarSide;
+  bool _systemToolbar = false;
+  Map<String, bool>? _sentToolbarActions;
 
   bool get _usesIosLayout =>
       !kIsWeb && defaultTargetPlatform == TargetPlatform.iOS;
@@ -111,34 +113,77 @@ class _PetRoomState extends State<PetRoom> with SingleTickerProviderStateMixin {
     )..repeat(reverse: true);
     if (_usesIosLayout) {
       _layoutChannel.setMethodCallHandler((call) async {
-        if (call.method == 'toolbarSideChanged') {
-          _setToolbarSide(call.arguments);
+        if (call.method == 'roomToolbarVisibleChanged') {
+          _setSystemToolbar(call.arguments);
+        } else if (call.method == 'roomToolbarAction') {
+          _handleToolbarAction(call.arguments);
         }
       });
-      unawaited(_readToolbarSide());
+      unawaited(_readSystemToolbar());
     }
     unawaited(_restore());
   }
 
-  Future<void> _readToolbarSide() async {
+  Future<void> _readSystemToolbar() async {
     try {
-      _setToolbarSide(await _layoutChannel.invokeMethod<String>('toolbarSide'));
+      _setSystemToolbar(
+        await _layoutChannel.invokeMethod<bool>('roomToolbarVisible'),
+      );
     } on MissingPluginException {
-      // Older preview builds can lay out the game without the native hint.
+      // Existing TestFlight builds keep the regular Flutter controls.
     } on PlatformException {
-      // SafeArea and window constraints still govern the layout.
+      // The regular layout is available if the platform cannot supply a bar.
     }
   }
 
-  void _setToolbarSide(Object? side) {
-    final position = switch (side) {
-      'left' => 'left',
-      'right' => 'right',
+  void _setSystemToolbar(Object? value) {
+    final visible = value == true;
+    if (mounted && _systemToolbar != visible) {
+      setState(() => _systemToolbar = visible);
+    }
+  }
+
+  Map<String, bool> _toolbarActions() {
+    final available =
+        (ModalRoute.isCurrentOf(context) ?? true) && !_busy && !_chatOpen;
+    return {
+      'care': available && _game.alive,
+      'talk': available && _game.alive,
+      'bag': available && _game.alive,
+      'album': available,
+      'settings': available,
+    };
+  }
+
+  void _handleToolbarAction(Object? action) {
+    if (!mounted || !_ready || action is! String) return;
+    if (_toolbarActions()[action] != true) return;
+    final VoidCallback? run = switch (action) {
+      'care' => _care,
+      'talk' => _openChat,
+      'bag' => _bag,
+      'album' => _album,
+      'settings' => _settings,
       _ => null,
     };
-    if (mounted && _toolbarSide != position) {
-      setState(() => _toolbarSide = position);
-    }
+    run?.call();
+  }
+
+  void _syncToolbarActions() {
+    if (!_usesIosLayout) return;
+    final actions = _toolbarActions();
+    if (mapEquals(_sentToolbarActions, actions)) return;
+    _sentToolbarActions = actions;
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted || !identical(_sentToolbarActions, actions)) return;
+      try {
+        await _layoutChannel.invokeMethod<void>('roomToolbarActions', actions);
+      } on MissingPluginException {
+        // Existing builds have no native bar to update.
+      } on PlatformException {
+        // Flutter controls continue to use the current game state.
+      }
+    });
   }
 
   Future<void> _restore() async {
@@ -1033,6 +1078,7 @@ class _PetRoomState extends State<PetRoom> with SingleTickerProviderStateMixin {
     if (!_ready) {
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
+    _syncToolbarActions();
     final keyboardOpen =
         _chatOpen && MediaQuery.viewInsetsOf(context).bottom > 0;
     return Scaffold(
@@ -1040,40 +1086,26 @@ class _PetRoomState extends State<PetRoom> with SingleTickerProviderStateMixin {
         child: LayoutBuilder(
           builder: (context, space) {
             if (space.maxWidth >= 620) return _wideRoom(space, keyboardOpen);
-            final rightDock =
-                _toolbarSide != null &&
-                !keyboardOpen &&
-                space.maxWidth >= 304 &&
-                MediaQuery.textScalerOf(context).scale(13) <= 18;
-            return _compactRoom(keyboardOpen, rightDock: rightDock);
+            return _compactRoom(keyboardOpen);
           },
         ),
       ),
     );
   }
 
-  Widget _compactRoom(bool keyboardOpen, {required bool rightDock}) => Center(
+  Widget _compactRoom(bool keyboardOpen) => Center(
     child: ConstrainedBox(
       constraints: const BoxConstraints(maxWidth: 610),
       child: Column(
         children: [
-          Expanded(
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              textDirection: TextDirection.ltr,
-              children: [
-                Expanded(child: _compactScene(keyboardOpen, rightDock)),
-                if (rightDock) _compactDock(),
-              ],
-            ),
-          ),
+          Expanded(child: _compactScene(keyboardOpen)),
           if (_chatOpen && _game.alive) _composer(),
         ],
       ),
     ),
   );
 
-  Widget _compactScene(bool keyboardOpen, bool rightDock) => LayoutBuilder(
+  Widget _compactScene(bool keyboardOpen) => LayoutBuilder(
     builder: (context, space) {
       final roomy =
           !keyboardOpen &&
@@ -1081,18 +1113,13 @@ class _PetRoomState extends State<PetRoom> with SingleTickerProviderStateMixin {
           MediaQuery.textScalerOf(context).scale(14) <= 18 &&
           _storageError.isEmpty &&
           _download == null;
-      final padding = EdgeInsets.fromLTRB(
-        16,
-        keyboardOpen ? 4 : 16,
-        rightDock ? 10 : 16,
-        14,
-      );
+      final padding = EdgeInsets.fromLTRB(16, keyboardOpen ? 4 : 16, 16, 14);
       final status = [
         const SizedBox(height: 12),
         _status(),
         const SizedBox(height: 12),
-        _actions(showPrimary: !rightDock),
-        if (!rightDock) _shortcuts(),
+        _actions(showPrimary: !_systemToolbar),
+        if (!_systemToolbar) _shortcuts(),
         ..._messages(),
       ];
       if (roomy) {
@@ -1263,7 +1290,12 @@ class _PetRoomState extends State<PetRoom> with SingleTickerProviderStateMixin {
           '${_game.fullness}/${_game.maxFullness}',
           urgent: _game.fullness == 0,
         ),
-        _stat('애정도', '${_game.affection}/${_game.nextAffection}'),
+        _stat(
+          '애정도',
+          _game.affection >= _game.nextAffection
+              ? '${_game.affection}'
+              : '${_game.affection}/${_game.nextAffection}',
+        ),
         _stat('배변', '${_game.waste}/3', urgent: _game.waste >= 3),
       ];
       return DecoratedBox(
@@ -1405,61 +1437,6 @@ class _PetRoomState extends State<PetRoom> with SingleTickerProviderStateMixin {
     (Icons.collections_outlined, '앨범·도감', _album),
     (Icons.settings_outlined, '설정', _settings),
   ];
-
-  Widget _compactDock() {
-    final actionStyle = FilledButton.styleFrom(
-      minimumSize: const Size(0, 48),
-      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
-    );
-    return SizedBox(
-      key: const ValueKey('compact-room-controls'),
-      width: 86,
-      child: Align(
-        alignment: Alignment.bottomCenter,
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.only(right: 12, bottom: 14, top: 12),
-          child: DecoratedBox(
-            decoration: BoxDecoration(
-              color: const Color(0xfff7f2e9),
-              borderRadius: BorderRadius.circular(18),
-              border: Border.all(color: const Color(0xffe8e0d1)),
-            ),
-            child: Padding(
-              padding: const EdgeInsets.all(5),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  FilledButton(
-                    style: actionStyle,
-                    onPressed: _careAction,
-                    child: _iconLabel(Icons.favorite_border, '돌보기'),
-                  ),
-                  if (!_chatOpen) ...[
-                    const SizedBox(height: 4),
-                    FilledButton.tonal(
-                      style: actionStyle,
-                      onPressed: _talkAction,
-                      child: _iconLabel(Icons.chat_bubble_outline, '말 걸기'),
-                    ),
-                  ],
-                  const Divider(height: 10),
-                  for (final (icon, label, onPressed) in _menuActions)
-                    TextButton(
-                      onPressed: _busy ? null : onPressed,
-                      style: TextButton.styleFrom(
-                        minimumSize: const Size(0, 48),
-                        padding: const EdgeInsets.symmetric(vertical: 6),
-                      ),
-                      child: _iconLabel(icon, label),
-                    ),
-                ],
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
 
   Widget _iconLabel(IconData icon, String label) => Column(
     mainAxisSize: MainAxisSize.min,
@@ -1717,6 +1694,15 @@ class _PetRoomState extends State<PetRoom> with SingleTickerProviderStateMixin {
       math.min(96.0, beside ? height * .48 : petTop - 12),
     );
     final tailX = ((petX - left) / bubbleWidth * 2 - 1).clamp(-.83, .83);
+    final preview = Padding(
+      padding: const EdgeInsets.fromLTRB(10, 6, 6, 6),
+      child: Text(
+        _sending ? '…' : _bubble,
+        maxLines: 2,
+        overflow: TextOverflow.ellipsis,
+        style: const TextStyle(fontSize: 14, height: 1.23),
+      ),
+    );
     final box = Material(
       color: paper,
       borderRadius: BorderRadius.circular(13),
@@ -1727,14 +1713,16 @@ class _PetRoomState extends State<PetRoom> with SingleTickerProviderStateMixin {
           crossAxisAlignment: CrossAxisAlignment.center,
           children: [
             Expanded(
-              child: SingleChildScrollView(
-                key: ValueKey(_sending ? 'thinking' : _bubble),
-                padding: const EdgeInsets.fromLTRB(10, 5, 6, 5),
-                child: Text(
-                  _sending ? '…' : _bubble,
-                  style: const TextStyle(fontSize: 14, height: 1.23),
-                ),
-              ),
+              child: _sending
+                  ? preview
+                  : Tooltip(
+                      message: '대사 전체 보기',
+                      child: InkWell(
+                        onTap: () =>
+                            _sheet<void>('동글귀의 말', [SelectableText(_bubble)]),
+                        child: preview,
+                      ),
+                    ),
             ),
             if (!_sending)
               Semantics(

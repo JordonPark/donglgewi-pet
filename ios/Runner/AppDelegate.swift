@@ -5,6 +5,7 @@ import Vision
 @main
 @objc class AppDelegate: FlutterAppDelegate, FlutterImplicitEngineDelegate {
   private(set) var layoutChannel: FlutterMethodChannel?
+  private(set) var roomToolbarActions: [String: Bool] = [:]
 
   func didInitializeImplicitFlutterEngine(_ engineBridge: FlutterImplicitEngineBridge) {
     GeneratedPluginRegistrant.register(with: engineBridge.pluginRegistry)
@@ -13,15 +14,18 @@ import Vision
       binaryMessenger: engineBridge.applicationRegistrar.messenger()
     )
     layoutChannel = layout
-    layout.setMethodCallHandler { call, result in
-      guard call.method == "toolbarSide" else {
+    layout.setMethodCallHandler { [weak self] call, result in
+      let controller = self?.roomController
+      switch call.method {
+      case "roomToolbarVisible":
+        result(controller?.roomToolbarVisible ?? false)
+      case "roomToolbarActions":
+        self?.roomToolbarActions = call.arguments as? [String: Bool] ?? [:]
+        controller?.updateRoomToolbar()
+        result(nil)
+      default:
         result(FlutterMethodNotImplemented)
-        return
       }
-      let controller = UIApplication.shared.connectedScenes
-        .compactMap { ($0 as? UIWindowScene)?.keyWindow?.rootViewController as? DonglgewiViewController }
-        .first
-      result(controller?.toolbarSide)
     }
     let channel = FlutterMethodChannel(
       name: "donglgewi/photos",
@@ -41,6 +45,13 @@ import Vision
         DispatchQueue.main.async { result(findings) }
       }
     }
+  }
+
+  private var roomController: DonglgewiViewController? {
+    UIApplication.shared.connectedScenes.compactMap { scene in
+      let navigation = (scene as? UIWindowScene)?.keyWindow?.rootViewController as? UINavigationController
+      return navigation?.topViewController as? DonglgewiViewController
+    }.first
   }
 
   private static func classifyPhoto(at url: URL) -> Any {
