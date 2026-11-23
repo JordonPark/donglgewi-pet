@@ -15,6 +15,10 @@ on:
         description: Publish a patch to the exact internal release, for example 0.1.0+3
         type: string
         required: false
+      keep_release_assets_for_staging:
+        description: Send a patch to staging for manual review when Flutter reports regenerated assets
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -95,11 +99,19 @@ jobs:
         env:
           SHOREBIRD_TOKEN: ${{ secrets.SHOREBIRD_TOKEN }}
           RELEASE_VERSION: ${{ inputs.patch_release }}
+          KEEP_RELEASE_ASSETS: ${{ inputs.keep_release_assets_for_staging }}
         run: |
           test -n "$SHOREBIRD_TOKEN"
           if [[ ! "$RELEASE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+\+[0-9]+$ ]]; then
             echo '::error::Enter the exact TestFlight release version and build number.'
             exit 1
           fi
-          shorebird patch ios --release-version="$RELEASE_VERSION" --track=stable --no-codesign \
-            --build-name="${RELEASE_VERSION%%+*}" --build-number="${RELEASE_VERSION##*+}"
+          track=stable
+          asset_args=()
+          if [[ "$KEEP_RELEASE_ASSETS" == true ]]; then
+            track=staging
+            asset_args+=(--allow-asset-diffs)
+          fi
+          shorebird patch ios --release-version="$RELEASE_VERSION" --track="$track" --no-codesign \
+            --build-name="${RELEASE_VERSION%%+*}" --build-number="${RELEASE_VERSION##*+}" \
+            "${asset_args[@]}"

@@ -795,12 +795,14 @@ class _PetRoomState extends State<PetRoom> with SingleTickerProviderStateMixin {
             children: [
               Expanded(child: Text('대화 체력 $_energyLabel')),
               if (_voice != null)
-                FilterChip(
-                  label: const Text('긴 답장'),
-                  selected: _longReply,
-                  onSelected: _sending
-                      ? null
-                      : (selected) => setState(() => _longReply = selected),
+                Semantics(
+                  toggled: _longReply,
+                  child: TextButton(
+                    onPressed: _sending
+                        ? null
+                        : () => setState(() => _longReply = !_longReply),
+                    child: Text(_longReply ? '긴 답장 켜짐' : '긴 답장'),
+                  ),
                 ),
               IconButton(
                 tooltip: '대화 닫기',
