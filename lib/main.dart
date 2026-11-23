@@ -1065,7 +1065,7 @@ class _PetRoomState extends State<PetRoom> with SingleTickerProviderStateMixin {
                       children: [
                         _identity(),
                         const SizedBox(height: 12),
-                        Expanded(child: Center(child: _scene())),
+                        Expanded(child: _scene(immersive: true)),
                         if (!_game.alive) Text(_bubble),
                         const SizedBox(height: 12),
                         _status(),
@@ -1132,16 +1132,7 @@ class _PetRoomState extends State<PetRoom> with SingleTickerProviderStateMixin {
             ? TextDirection.rtl
             : TextDirection.ltr,
         children: [
-          Expanded(
-            child: Center(
-              child: ConstrainedBox(
-                constraints: BoxConstraints(
-                  maxWidth: math.max(160, (space.maxHeight - 36) * 1.5),
-                ),
-                child: _scene(),
-              ),
-            ),
-          ),
+          Expanded(child: _scene(immersive: true)),
           const SizedBox(width: 16),
           SizedBox(
             key: const ValueKey('room-controls'),
@@ -1351,142 +1342,200 @@ class _PetRoomState extends State<PetRoom> with SingleTickerProviderStateMixin {
         ),
       );
 
-  Widget _scene() => ClipRRect(
-    key: const ValueKey('pet-stage'),
-    borderRadius: BorderRadius.circular(20),
-    child: AspectRatio(
-      aspectRatio: 1.5,
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          final width = constraints.maxWidth;
-          final height = constraints.maxHeight;
-          final size =
-              width *
-              (.20 +
-                  (_game.level >= 5
-                      ? .04
-                      : _game.level >= 3
-                      ? .02
-                      : 0));
-          final disc = _discPosition;
-          return TweenAnimationBuilder<Offset>(
-            tween: Tween(end: _position),
-            duration: _moveDuration,
-            curve: Curves.easeInOut,
-            builder: (context, position, _) {
-              final petX = width * position.dx;
-              final petTop = height * position.dy - size * .65;
-              return Stack(
-                fit: StackFit.expand,
-                children: [
-                  Image.asset(
-                    'assets/pet/${_game.inPark ? 'park' : 'room'}.png',
-                    fit: BoxFit.fill,
+  Widget _scene({bool immersive = false}) {
+    final surface = LayoutBuilder(
+      builder: (context, constraints) {
+        final width = constraints.maxWidth;
+        final height = constraints.maxHeight;
+        final worldWidth = immersive
+            ? math.min(width * 1.20, height * 1.5)
+            : width;
+        final worldHeight = immersive ? worldWidth / 1.5 : height;
+        final worldX = (width - worldWidth) / 2;
+        final worldY = (height - worldHeight) / 2;
+        final size =
+            worldWidth *
+            (.20 +
+                (_game.level >= 5
+                    ? .04
+                    : _game.level >= 3
+                    ? .02
+                    : 0));
+        final disc = _discPosition;
+        return TweenAnimationBuilder<Offset>(
+          tween: Tween(end: _position),
+          duration: _moveDuration,
+          curve: Curves.easeInOut,
+          builder: (context, position, _) {
+            final petX = worldX + worldWidth * position.dx;
+            final petTop = worldY + worldHeight * position.dy - size * .65;
+            return Stack(
+              fit: StackFit.expand,
+              children: [
+                if (immersive)
+                  DecoratedBox(
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                        colors: [
+                          const Color(0xfff6ebdd),
+                          const Color(0xfffcf1e6),
+                          _game.inPark
+                              ? const Color(0xffeaf0df)
+                              : const Color(0xfff0e1cf),
+                        ],
+                      ),
+                    ),
                   ),
-                  for (
-                    var index = 0;
-                    index < _game.waste && !_game.inPark;
-                    index++
-                  )
-                    Positioned(
-                      left: width * (.64 + .065 * index),
-                      top: height * (.84 - .04 * index),
-                      child: const Text('💩', style: TextStyle(fontSize: 17)),
-                    ),
-                  if (disc != null)
-                    Positioned(
-                      left: width * disc.dx - width * .026,
-                      top: height * disc.dy - 10,
-                      child: Transform.rotate(
-                        angle: -.25,
-                        child: Container(
-                          width: width * .065,
-                          height: width * .028,
-                          decoration: BoxDecoration(
-                            color: const Color(0xffffa12c),
-                            borderRadius: BorderRadius.circular(20),
-                            border: Border.all(
-                              color: const Color(0xff994624),
-                              width: 2,
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                  if (_game.alive)
-                    Positioned(
-                      left: petX - size / 2,
-                      top: petTop,
-                      width: size,
-                      height: size * .7,
-                      child: Semantics(
-                        button: true,
-                        label: '동글귀 톡 누르기',
-                        child: GestureDetector(
-                          onTap: _tapPet,
-                          child: Stack(
-                            alignment: Alignment.bottomCenter,
-                            children: [
-                              Container(
-                                width: size * .62,
-                                height: size * .13,
-                                decoration: BoxDecoration(
-                                  color: const Color(0x443d2514),
-                                  borderRadius: BorderRadius.circular(100),
-                                ),
-                              ),
-                              AnimatedBuilder(
-                                animation: _idle,
-                                builder: (context, child) =>
-                                    Transform.translate(
-                                      offset: Offset(
-                                        0,
-                                        _busy ? 0 : -2.5 * _idle.value,
-                                      ),
-                                      child: Transform.flip(
-                                        flipX: _facingLeft,
-                                        child: child,
-                                      ),
-                                    ),
-                                child: Image.asset(
-                                  'assets/pet/dongle.png',
-                                  fit: BoxFit.contain,
-                                  filterQuality: FilterQuality.low,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ),
-                  if (_game.alive && (_sending || _bubble.isNotEmpty))
-                    _speechBubble(width, height, petX, petTop, size),
+                Positioned(
+                  left: worldX,
+                  top: worldY,
+                  width: worldWidth,
+                  height: worldHeight,
+                  child: _scenery(immersive),
+                ),
+                for (
+                  var index = 0;
+                  index < _game.waste && !_game.inPark;
+                  index++
+                )
                   Positioned(
-                    right: 9,
-                    top: 9,
-                    child: FilledButton.tonalIcon(
-                      onPressed: _busy || !_game.alive ? null : _changeLocation,
-                      icon: Icon(
-                        _game.inPark
-                            ? Icons.home_outlined
-                            : Icons.park_outlined,
-                        size: 17,
-                      ),
-                      label: Text(_game.inPark ? '집으로' : '공원 산책'),
-                      style: FilledButton.styleFrom(
-                        backgroundColor: paper.withValues(alpha: .94),
-                        padding: const EdgeInsets.symmetric(horizontal: 10),
+                    left: worldX + worldWidth * (.64 + .065 * index),
+                    top: worldY + worldHeight * (.84 - .04 * index),
+                    child: const Text('💩', style: TextStyle(fontSize: 17)),
+                  ),
+                if (disc != null)
+                  Positioned(
+                    left: worldX + worldWidth * (disc.dx - .026),
+                    top: worldY + worldHeight * disc.dy - 10,
+                    child: Transform.rotate(
+                      angle: -.25,
+                      child: Container(
+                        width: worldWidth * .065,
+                        height: worldWidth * .028,
+                        decoration: BoxDecoration(
+                          color: const Color(0xffffa12c),
+                          borderRadius: BorderRadius.circular(20),
+                          border: Border.all(
+                            color: const Color(0xff994624),
+                            width: 2,
+                          ),
+                        ),
                       ),
                     ),
                   ),
-                ],
-              );
-            },
-          );
-        },
-      ),
-    ),
-  );
+                if (_game.alive)
+                  Positioned(
+                    left: petX - size / 2,
+                    top: petTop,
+                    width: size,
+                    height: size * .7,
+                    child: Semantics(
+                      button: true,
+                      label: '동글귀 톡 누르기',
+                      child: GestureDetector(
+                        onTap: _tapPet,
+                        child: Stack(
+                          alignment: Alignment.bottomCenter,
+                          children: [
+                            Container(
+                              width: size * .62,
+                              height: size * .13,
+                              decoration: BoxDecoration(
+                                color: const Color(0x443d2514),
+                                borderRadius: BorderRadius.circular(100),
+                              ),
+                            ),
+                            AnimatedBuilder(
+                              animation: _idle,
+                              builder: (context, child) => Transform.translate(
+                                offset: Offset(
+                                  0,
+                                  _busy ? 0 : -2.5 * _idle.value,
+                                ),
+                                child: Transform.flip(
+                                  flipX: _facingLeft,
+                                  child: child,
+                                ),
+                              ),
+                              child: Image.asset(
+                                'assets/pet/dongle.png',
+                                fit: BoxFit.contain,
+                                filterQuality: FilterQuality.low,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                if (_game.alive && (_sending || _bubble.isNotEmpty))
+                  _speechBubble(width, height, petX, petTop, size),
+                if (immersive)
+                  Positioned(
+                    top: 15,
+                    left: 15,
+                    child: Text(
+                      _game.inPark ? '공원' : '우리 방',
+                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ),
+                Positioned(
+                  right: 9,
+                  top: 9,
+                  child: FilledButton.tonalIcon(
+                    onPressed: _busy || !_game.alive ? null : _changeLocation,
+                    icon: Icon(
+                      _game.inPark ? Icons.home_outlined : Icons.park_outlined,
+                      size: 17,
+                    ),
+                    label: Text(_game.inPark ? '집으로' : '공원 산책'),
+                    style: FilledButton.styleFrom(
+                      backgroundColor: paper.withValues(alpha: .94),
+                      padding: const EdgeInsets.symmetric(horizontal: 10),
+                    ),
+                  ),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+    return ClipRRect(
+      key: const ValueKey('pet-stage'),
+      borderRadius: BorderRadius.circular(20),
+      child: immersive
+          ? surface
+          : AspectRatio(aspectRatio: 1.5, child: surface),
+    );
+  }
+
+  Widget _scenery(bool immersive) {
+    final picture = Image.asset(
+      'assets/pet/${_game.inPark ? 'park' : 'room'}.png',
+      fit: BoxFit.fill,
+    );
+    if (!immersive) return picture;
+    return ShaderMask(
+      blendMode: BlendMode.dstIn,
+      shaderCallback: (bounds) => const LinearGradient(
+        begin: Alignment.topCenter,
+        end: Alignment.bottomCenter,
+        colors: [
+          Colors.transparent,
+          Colors.white,
+          Colors.white,
+          Colors.transparent,
+        ],
+        stops: [0, .07, .93, 1],
+      ).createShader(bounds),
+      child: picture,
+    );
+  }
 
   Widget _speechBubble(
     double width,
