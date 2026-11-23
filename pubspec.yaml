@@ -1,0 +1,46 @@
+name: donglgewi
+description: 동글귀 로컬 AI 펫
+publish_to: none
+version: 0.1.0+1
+
+environment:
+  sdk: ^3.10.7
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_localizations:
+    sdk: flutter
+  crypto: ^3.0.7
+  cupertino_icons: ^1.0.8
+  cupertino_ui: ^1.1.7
+  image_picker: ^1.2.1
+  llamadart: 0.20.2
+  llamadart_llama_cpp_flutter: 0.20.2
+  material_ui: ^1.1.0
+  path_provider: ^2.1.5
+  web: ^1.1.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true
+  fonts:
+    - family: PetNotoSansKR
+      fonts:
+        - asset: assets/pet/NotoSansKR.ttf
+  assets:
+    - assets/pet/
+    - assets/kanana-notice.txt
+    - assets/apache-2.0.txt
+
+hooks:
+  user_defines:
+    llamadart:
+      llamadart_native_runtimes: [llama_cpp]
+      llamadart_native_backends:
+        platforms:
+          android: [cpu]

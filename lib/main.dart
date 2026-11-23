@@ -1,0 +1,1253 @@
+import 'dart:async';
+import 'dart:convert';
+import 'dart:math' as math;
+import 'dart:typed_data';
+
+import 'package:flutter/foundation.dart'
+    show LicenseEntryWithLineBreaks, LicenseRegistry;
+import 'package:flutter/services.dart' show rootBundle;
+import 'package:image_picker/image_picker.dart';
+import 'package:material_ui/material_ui.dart';
+
+import 'pet/pet_game.dart';
+import 'pet/pet_platform.dart';
+import 'pet/pet_voice.dart';
+import 'photo_analysis.dart';
+
+const forest = Color(0xff214e3b);
+const ink = Color(0xff26382e);
+const paper = Color(0xfffffaf1);
+const mint = Color(0xffe2ebda);
+
+void main() {
+  LicenseRegistry.addLicense(() async* {
+    yield LicenseEntryWithLineBreaks([
+      'Noto Sans KR',
+    ], await rootBundle.loadString('assets/pet/NotoSansKR-OFL.txt'));
+  });
+  runApp(const PetApp());
+}
+
+class PetApp extends StatelessWidget {
+  const PetApp({super.key});
+
+  @override
+  Widget build(BuildContext context) => MaterialApp(
+    debugShowCheckedModeBanner: false,
+    title: '동글귀 · 로컬 펫',
+    locale: const Locale('ko'),
+    supportedLocales: const [Locale('ko'), Locale('en')],
+    localizationsDelegates: GlobalMaterialLocalizations.delegates,
+    theme: ThemeData(
+      useMaterial3: true,
+      fontFamily: 'PetNotoSansKR',
+      colorScheme: ColorScheme.fromSeed(seedColor: forest, surface: paper),
+      scaffoldBackgroundColor: paper,
+      textTheme: ThemeData.light().textTheme.apply(
+        fontFamily: 'PetNotoSansKR',
+        bodyColor: ink,
+        displayColor: ink,
+      ),
+      inputDecorationTheme: InputDecorationTheme(
+        border: OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
+      ),
+    ),
+    home: const PetRoom(),
+  );
+}
+
+class PetRoom extends StatefulWidget {
+  const PetRoom({super.key});
+
+  @override
+  State<PetRoom> createState() => _PetRoomState();
+}
+
+class _PetRoomState extends State<PetRoom> with SingleTickerProviderStateMixin {
+  static const _home = Offset(.51, .82);
+  static const _park = Offset(.52, .59);
+  final _picker = ImagePicker();
+  late final AnimationController _idle;
+  late PetGame _game;
+  PetVoice? _voice;
+  Timer? _timer;
+  Future<void> _writes = Future.value();
+  Offset _position = _home;
+  Offset? _discPosition;
+  Duration _moveDuration = const Duration(milliseconds: 220);
+  bool _facingLeft = false;
+  bool _ready = false;
+  bool _busy = false;
+  bool _greeting = false;
+  bool _voiceLoading = false;
+  bool _canReplay = false;
+  double? _download;
+  String _bubble = '안녕! 우리 방에 온 걸 환영해.';
+  String _storageError = '';
+
+  @override
+  void initState() {
+    super.initState();
+    _idle = AnimationController(
+      vsync: this,
+      duration: const Duration(seconds: 3),
+    )..repeat(reverse: true);
+    unawaited(_restore());
+  }
+
+  Future<void> _restore() async {
+    try {
+      final snapshot = await readPetSnapshot();
+      _game = snapshot == null
+          ? PetGame(DateTime.now())
+          : PetGame.decode(snapshot);
+    } catch (_) {
+      _game = PetGame(DateTime.now());
+      _storageError = '저장 기록을 읽을 수 없어요.';
+    }
+    _game.advance(_game.now());
+    if (!mounted) return;
+    _position = _game.inPark ? _park : _home;
+    setState(() {
+      _ready = true;
+      _voiceLoading = petNativeModelAvailable;
+      if (_game.healthy &&
+          _game.greetingDay == petDay(_game.at) &&
+          _game.greeting.isNotEmpty) {
+        _bubble = _game.greeting;
+      }
+    });
+    _timer = Timer.periodic(const Duration(seconds: 5), (_) => _refresh());
+    _refresh();
+    if (_voiceLoading) unawaited(_loadVoice());
+  }
+
+  Future<void> _loadVoice() async {
+    try {
+      final voice = await openPetVoice();
+      if (!mounted) {
+        await voice?.dispose();
+        return;
+      }
+      setState(() => _voice = voice);
+    } catch (_) {
+      // The room remains playable while the local model is unavailable.
+    } finally {
+      if (mounted) {
+        setState(() => _voiceLoading = false);
+        _refresh();
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    _idle.dispose();
+    final voice = _voice;
+    voice?.cancel();
+    if (voice != null) unawaited(voice.dispose());
+    super.dispose();
+  }
+
+  void _save() {
+    final snapshot = _game.encode();
+    _writes = _writes.then((_) => savePetSnapshot(snapshot)).catchError((
+      Object error,
+    ) {
+      if (mounted && _storageError.isEmpty) {
+        setState(() => _storageError = '이 기기에 저장하지 못했어요.');
+      }
+    });
+  }
+
+  void _refresh() {
+    if (!mounted || !_ready) return;
+    final wasAlive = _game.alive;
+    final oldWaste = _game.waste;
+    final oldLevel = _game.level;
+    final oldFullness = _game.fullness;
+    _game.advance(_game.now());
+    if (!_game.alive) {
+      if (wasAlive) _save();
+      setState(() => _bubble = '${_game.death}으로 동글귀를 떠나보냈어요.');
+      return;
+    }
+    if (!_game.healthy) {
+      final key =
+          '${_game.hungerDeadline}:${_game.waste >= 3 ? _game.hygieneDeadline : null}';
+      if (_game.lastWarning != key) {
+        _game.lastWarning = key;
+        _bubble = _game.hungerDeadline != null && _game.waste >= 3
+            ? '배고프고 바닥도 더러워. 돌봐줄래?'
+            : _game.hungerDeadline != null
+            ? '배가 꼬르륵해. 먹이 하나 줄래?'
+            : '바닥을 조금 치워줄래?';
+        _save();
+      }
+    } else {
+      _game.lastWarning = '';
+    }
+    if (oldWaste != _game.waste ||
+        oldLevel != _game.level ||
+        oldFullness != _game.fullness) {
+      _save();
+    }
+    setState(() {});
+    if (_game.healthy && !_busy && !_voiceLoading) unawaited(_greet());
+  }
+
+  Future<void> _greet() async {
+    if (_greeting || _busy || !_game.healthy) return;
+    final game = _game;
+    final day = petDay(game.at);
+    if (game.greetingDay == day) return;
+    final memory = game.nextMemory;
+    if (memory == null) return;
+    _greeting = true;
+    final distance = petDayDifference(game.at, memory.at);
+    final time = distance == 1 ? '어제' : '$distance일 전에';
+    final ending = game.disc ? '오늘도 원반으로 놀까?' : '오늘은 뭐 하고 놀까?';
+    final reply = await _reply(
+      '추억: ${memory.title}. 저장 시점: $time.',
+      '이 추억을 먼저 꺼내고 하고 싶은 놀이를 한마디로 이야기해.',
+      48,
+    );
+    _greeting = false;
+    if (!mounted || game != _game || !game.healthy || petDay(game.at) != day) {
+      return;
+    }
+    // Keep the actual title in the greeting even if a small model omits it.
+    final line =
+        reply != null &&
+            reply.text.contains(memory.title) &&
+            reply.text.contains(time)
+        ? reply.text
+        : '$time 남긴 ‘${memory.title}’ 기억나? $ending';
+    game.greetingDay = day;
+    game.greeting = line;
+    game.lastMemory = memory.at.toIso8601String();
+    setState(() => _bubble = line);
+    _save();
+  }
+
+  Future<({String text, int tokens})?> _reply(
+    String note,
+    String question,
+    int limit,
+  ) async {
+    final voice = _voice;
+    if (voice == null || limit < 12) return null;
+    final state = jsonEncode({
+      '건강': _game.healthLabel,
+      '기분': _game.moodLabel,
+      '포만감': '${_game.fullness}/${_game.maxFullness}',
+      '장소': _game.inPark ? '공원' : '집',
+      '원반을 가지고 있음': _game.disc,
+      '참고': note,
+    });
+    try {
+      final reply = await voice
+          .reply(state, question, limit)
+          .timeout(const Duration(seconds: 7));
+      return reply != null && reply.text.isNotEmpty && reply.tokens <= limit
+          ? reply
+          : null;
+    } catch (_) {
+      voice.cancel();
+      return null;
+    }
+  }
+
+  Future<void> _animateTo(Offset next, [int milliseconds = 230]) async {
+    if (!mounted) return;
+    setState(() {
+      if ((next.dx - _position.dx).abs() > .02) {
+        _facingLeft = next.dx < _position.dx;
+      }
+      _moveDuration = Duration(milliseconds: milliseconds);
+      _position = next;
+    });
+    await Future<void>.delayed(_moveDuration);
+  }
+
+  Future<void> _feed(bool apple) async {
+    _refresh();
+    if (_busy || !_game.feed(apple: apple)) {
+      _notice(
+        _game.fullness >= _game.maxFullness ? '지금은 배가 불러요.' : '지금은 먹일 수 없어요.',
+      );
+      return;
+    }
+    setState(() {
+      _busy = true;
+      _bubble = apple ? '아삭! 사과 맛있어.' : '냠냠. 이제 좀 든든해!';
+    });
+    _save();
+    await _animateTo(const Offset(.31, .80), 450);
+    await _animateTo(const Offset(.31, .77), 220);
+    await _animateTo(const Offset(.31, .80), 250);
+    if (!mounted) return;
+    setState(() => _busy = false);
+    _refresh();
+  }
+
+  void _clean() {
+    _refresh();
+    if (_busy || !_game.clean()) return;
+    setState(() => _bubble = '이제 발 디딜 곳이 생겼다!');
+    _save();
+    _refresh();
+  }
+
+  Future<void> _throw({bool left = false}) async {
+    _refresh();
+    if (_busy || !_game.healthy || !_game.disc) {
+      _notice(!_game.disc ? '가방에 원반이 필요해요.' : '먼저 동글귀를 돌봐주세요.');
+      return;
+    }
+    setState(() {
+      _busy = true;
+      _canReplay = false;
+      _bubble = '내가 받아올게!';
+    });
+    final anchor = _game.inPark ? _park : _home;
+    final landing = _game.inPark
+        ? const Offset(.81, .64)
+        : left
+        ? const Offset(.40, .61)
+        : const Offset(.79, .63);
+    await _animateTo(anchor);
+    if (!mounted) return;
+    setState(() => _discPosition = landing);
+    final outward = _game.inPark
+        ? [const Offset(.64, .69), landing]
+        : left
+        ? [const Offset(.43, .76), landing]
+        : [const Offset(.72, .81), landing];
+    for (final point in outward) {
+      await _animateTo(point, 280);
+      if (!mounted || !_game.healthy) break;
+    }
+    if (!mounted) return;
+    if (_game.healthy) {
+      await _animateTo(Offset(landing.dx, landing.dy - .055), 180);
+      if (!mounted) return;
+      setState(() => _discPosition = null);
+      await _animateTo(landing, 170);
+      if (!_game.inPark && !left) await _animateTo(const Offset(.60, .63), 330);
+      await _animateTo(anchor, 440);
+    }
+    if (!mounted) return;
+    _game.advance(_game.now());
+    _game.play();
+    setState(() {
+      _discPosition = null;
+      _busy = false;
+      _canReplay = _game.healthy;
+      if (_canReplay) _bubble = '잡았다! 한 번 더 던져볼까?';
+    });
+    _save();
+    _refresh();
+  }
+
+  Future<void> _chooseThrow() async {
+    if (_game.level < 4 || _game.inPark || !_game.healthy) return _throw();
+    final left = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('어디에 던질까요?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('왼쪽'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('오른쪽'),
+          ),
+        ],
+      ),
+    );
+    if (left != null && mounted) await _throw(left: left);
+  }
+
+  void _tapPet() {
+    if (!_game.alive || _busy) return;
+    _game.mark(PetActivity.bond);
+    setState(() {
+      _facingLeft = !_facingLeft;
+      if (_game.healthy) _bubble = '응? 여기 있어!';
+    });
+    _save();
+  }
+
+  Future<void> _changeLocation() async {
+    if (_busy || !_game.alive) return;
+    final toPark = !_game.inPark;
+    if (toPark && !_game.healthy) {
+      _notice('산책 전에 동글귀를 돌봐주세요.');
+      return;
+    }
+    setState(() {
+      _game.inPark = toPark;
+      _canReplay = false;
+      _position = toPark ? const Offset(.23, .72) : _home;
+      _bubble = toPark ? '오늘은 벤치까지 걸어가 볼까?' : '우리 집에 돌아왔어.';
+      _busy = toPark;
+    });
+    if (toPark) {
+      await _animateTo(const Offset(.39, .65), 370);
+      await _animateTo(_park, 440);
+      if (!mounted) return;
+      _game.walk();
+      setState(() => _busy = false);
+    }
+    _save();
+    _refresh();
+  }
+
+  void _notice(String text) =>
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
+
+  Future<T?> _sheet<T>(String title, List<Widget> children) =>
+      showModalBottomSheet<T>(
+        context: context,
+        isScrollControlled: true,
+        showDragHandle: true,
+        backgroundColor: paper,
+        builder: (context) => SafeArea(
+          child: Padding(
+            padding: EdgeInsets.only(
+              bottom: MediaQuery.viewInsetsOf(context).bottom,
+            ),
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.fromLTRB(22, 0, 22, 25),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Text(
+                    title,
+                    style: const TextStyle(
+                      fontSize: 25,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  ...children,
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+
+  Widget _actionRow(
+    IconData icon,
+    String title,
+    String subtitle,
+    String button,
+    VoidCallback? onPressed,
+  ) => ListTile(
+    contentPadding: EdgeInsets.zero,
+    leading: CircleAvatar(
+      backgroundColor: mint,
+      foregroundColor: forest,
+      child: Icon(icon),
+    ),
+    title: Text(title, style: const TextStyle(fontWeight: FontWeight.w700)),
+    subtitle: Text(subtitle),
+    trailing: FilledButton.tonal(onPressed: onPressed, child: Text(button)),
+  );
+
+  Future<void> _bag({bool fresh = false}) async {
+    if (!_game.alive) return;
+    final action = await _sheet<String>('가방', [
+      if (fresh && _game.memories.isNotEmpty)
+        ListTile(
+          contentPadding: EdgeInsets.zero,
+          leading: const Icon(Icons.auto_awesome, color: forest),
+          title: Text(_game.memories.last.title),
+          subtitle: const Text('새 추억을 저장했어요.'),
+        ),
+      _actionRow(
+        Icons.apple,
+        '사과 ×${_game.apples}',
+        '사진에서 얻은 먹거리',
+        '먹이기',
+        _game.apples > 0 && !_game.inPark
+            ? () => Navigator.pop(context, 'apple')
+            : null,
+      ),
+      _actionRow(
+        Icons.rice_bowl,
+        '기본 먹이 ×${_game.pantry}',
+        '매일 보충되는 먹이',
+        '먹이기',
+        !_game.inPark &&
+                (_game.pantry > 0 || (_game.apples == 0 && _game.fullness == 0))
+            ? () => Navigator.pop(context, 'feed')
+            : null,
+      ),
+      _actionRow(
+        Icons.trip_origin,
+        '원반',
+        _game.disc ? '여러 번 놀 수 있어요.' : '사진에서 찾아보세요.',
+        '던지기',
+        _game.disc ? () => Navigator.pop(context, 'throw') : null,
+      ),
+      const Divider(),
+      OutlinedButton.icon(
+        onPressed: () => Navigator.pop(context, 'import'),
+        icon: const Icon(Icons.add_photo_alternate_outlined),
+        label: const Text('아이템 얻기'),
+      ),
+    ]);
+    if (!mounted) return;
+    switch (action) {
+      case 'apple':
+        await _feed(true);
+      case 'feed':
+        await _feed(false);
+      case 'throw':
+        await _chooseThrow();
+      case 'import':
+        await _import();
+    }
+  }
+
+  Future<void> _care() async {
+    if (_game.inPark) {
+      _notice('먹이기와 청소는 집에서 할 수 있어요.');
+      return;
+    }
+    if (!_game.alive) return;
+    final action = await _sheet<String>('돌보기', [
+      Text('포만감 ${_game.fullness}/${_game.maxFullness} · 배변 ${_game.waste}/3'),
+      const SizedBox(height: 10),
+      _actionRow(
+        Icons.apple,
+        '사과 ×${_game.apples}',
+        '포만감 +1칸',
+        '먹이기',
+        _game.apples > 0 ? () => Navigator.pop(context, 'apple') : null,
+      ),
+      _actionRow(
+        Icons.rice_bowl,
+        '기본 먹이 ×${_game.pantry}',
+        '포만감 +1칸',
+        '먹이기',
+        _game.pantry > 0 || (_game.apples == 0 && _game.fullness == 0)
+            ? () => Navigator.pop(context, 'feed')
+            : null,
+      ),
+      _actionRow(
+        Icons.cleaning_services_outlined,
+        '청소하기',
+        '배변 ${_game.waste}개',
+        '치우기',
+        _game.waste > 0 ? () => Navigator.pop(context, 'clean') : null,
+      ),
+    ]);
+    if (!mounted) return;
+    if (action == 'apple' || action == 'feed') {
+      await _feed(action == 'apple');
+    } else if (action == 'clean') {
+      _clean();
+    }
+  }
+
+  Future<void> _import() async {
+    final source = await _sheet<String>('아이템 얻기', [
+      FilledButton.tonalIcon(
+        onPressed: () => Navigator.pop(context, 'photo'),
+        icon: const Icon(Icons.photo_library_outlined),
+        label: const Text('사진 선택'),
+      ),
+      OutlinedButton.icon(
+        onPressed: () => Navigator.pop(context, 'sample'),
+        icon: const Icon(Icons.park_outlined),
+        label: const Text('시연용 소풍 장면'),
+      ),
+    ]);
+    if (!mounted || source == null) return;
+    Uint8List? bytes;
+    List<String> labels = [];
+    final sample = source == 'sample';
+    if (!sample) {
+      try {
+        if (petNativeModelAvailable) {
+          final findings = await PhotoAnalysis().pickAndAnalyze();
+          bytes = findings?.imageBytes;
+          labels = findings?.labels ?? [];
+        } else {
+          final picked = await _picker.pickImage(
+            source: ImageSource.gallery,
+            maxWidth: 1400,
+          );
+          bytes = await picked?.readAsBytes();
+        }
+      } catch (_) {
+        if (mounted) _notice('사진을 열 수 없어요. 시연 장면으로 진행할 수 있어요.');
+      }
+      if (!mounted || bytes == null) return;
+    }
+    final picked = bytes;
+    final memory = TextEditingController(text: sample ? '공원 소풍' : '');
+    bool apple =
+        sample || labels.any((label) => label.toLowerCase().contains('apple'));
+    bool disc =
+        sample ||
+        labels.any((label) => label.toLowerCase().contains('frisbee'));
+    bool confirmed = false;
+    await showModalBottomSheet<void>(
+      isScrollControlled: true,
+      showDragHandle: true,
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setModalState) => SafeArea(
+          child: SingleChildScrollView(
+            padding: EdgeInsets.fromLTRB(
+              22,
+              0,
+              22,
+              22 + MediaQuery.viewInsetsOf(context).bottom,
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                const Text(
+                  '아이템 확인',
+                  style: TextStyle(fontSize: 24, fontWeight: FontWeight.w800),
+                ),
+                const SizedBox(height: 10),
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(14),
+                  child: sample
+                      ? SizedBox(
+                          height: 120,
+                          child: Stack(
+                            fit: StackFit.expand,
+                            alignment: Alignment.center,
+                            children: [
+                              Image.asset(
+                                'assets/pet/park.png',
+                                fit: BoxFit.cover,
+                              ),
+                              const Center(
+                                child: Text(
+                                  '🍎  🟠',
+                                  style: TextStyle(fontSize: 40),
+                                ),
+                              ),
+                            ],
+                          ),
+                        )
+                      : Image.memory(
+                          picked!,
+                          height: 130,
+                          fit: BoxFit.contain,
+                          errorBuilder: (_, _, _) =>
+                              const Text('미리보기를 표시할 수 없어요.'),
+                        ),
+                ),
+                const SizedBox(height: 10),
+                Text(
+                  sample
+                      ? '시연용 장면에서 사과와 원반을 담을 수 있어요.'
+                      : '사진에 있는 물건을 직접 확인해 골라주세요.',
+                ),
+                TextField(
+                  controller: memory,
+                  maxLength: 60,
+                  decoration: const InputDecoration(labelText: '추억 제목'),
+                ),
+                CheckboxListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('사과'),
+                  value: apple,
+                  onChanged: (v) => setModalState(() => apple = v ?? false),
+                ),
+                CheckboxListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('원반'),
+                  value: disc,
+                  onChanged: (v) => setModalState(() => disc = v ?? false),
+                ),
+                FilledButton(
+                  onPressed: () {
+                    confirmed = true;
+                    Navigator.pop(context);
+                  },
+                  child: const Text('가방에 담기'),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+    final title = memory.text.trim();
+    memory.dispose();
+    if (!mounted || !confirmed) return;
+    if (!apple && !disc && title.isEmpty) {
+      _notice('담을 아이템이나 추억을 선택해주세요.');
+      return;
+    }
+    _game.addFinds(title, apple: apple, frisbee: disc);
+    setState(() => _bubble = '가방에 담았어. 같이 써보자!');
+    _save();
+    await _bag(fresh: title.isNotEmpty);
+  }
+
+  Future<void> _chat() async {
+    if (!_game.alive) return;
+    final controller = TextEditingController();
+    var replyText = _bubble;
+    var sending = false;
+    var long = false;
+    await showModalBottomSheet<void>(
+      isScrollControlled: true,
+      showDragHandle: true,
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setModalState) => SafeArea(
+          child: Padding(
+            padding: EdgeInsets.fromLTRB(
+              22,
+              0,
+              22,
+              22 + MediaQuery.viewInsetsOf(context).bottom,
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text(
+                  '동글귀와 대화',
+                  style: Theme.of(context).textTheme.headlineSmall,
+                ),
+                Text(
+                  _voice == null
+                      ? '기본 대사 · 로컬 모델 대기'
+                      : '대화 체력 $_energyLabel · 기분 ${_game.mood}/10',
+                ),
+                const SizedBox(height: 12),
+                Text(replyText, style: const TextStyle(fontSize: 16)),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: controller,
+                  maxLength: 160,
+                  decoration: const InputDecoration(labelText: '무슨 말을 걸까요?'),
+                ),
+                SwitchListTile(
+                  value: long,
+                  onChanged: sending
+                      ? null
+                      : (v) => setModalState(() => long = v),
+                  title: const Text('여유 있게 답하기'),
+                ),
+                FilledButton(
+                  onPressed: sending
+                      ? null
+                      : () async {
+                          final question = controller.text.trim();
+                          if (question.isEmpty) return;
+                          _game.advance(_game.now());
+                          if (!_game.alive) return;
+                          final game = _game;
+                          final candidate =
+                              game.nextMemory?.title ??
+                              (game.memories.isEmpty
+                                  ? ''
+                                  : game.memories.last.title);
+                          if (game.energy < 12) {
+                            setModalState(() => replyText = '잠깐 쉬었다가 또 이야기하자.');
+                            return;
+                          }
+                          setModalState(() => sending = true);
+                          final reply = await _reply(
+                            '최근 추억: $candidate',
+                            question,
+                            math.min(long ? 64 : 32, game.energy),
+                          );
+                          if (!mounted || !context.mounted || game != _game) {
+                            return;
+                          }
+                          final text =
+                              reply?.text ??
+                              _fallbackReply(question, candidate);
+                          if (reply != null) {
+                            game.spend(reply.tokens);
+                            if (question.contains('잘했') ||
+                                question.contains('고마워')) {
+                              game.moodChange(1);
+                            }
+                          } else {
+                            game.mark(PetActivity.bond);
+                          }
+                          controller.clear();
+                          setModalState(() {
+                            sending = false;
+                            replyText = text;
+                          });
+                          setState(() => _bubble = text);
+                          _save();
+                        },
+                  child: Text(sending ? '동글귀가 생각 중…' : '보내기'),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+    controller.dispose();
+  }
+
+  String _fallbackReply(String question, String memory) {
+    if (_game.fullness == 0) return '배가 꼬르륵해. 먼저 먹이 하나 줄래?';
+    if (_game.waste >= 3) return '바닥을 치워주면 같이 놀 수 있어!';
+    if (question.contains('원반') || question.contains('놀')) {
+      return _game.disc ? '좋아! 가방에서 원반을 던져줘.' : '원반이 생기면 같이 놀자.';
+    }
+    if (memory.isNotEmpty &&
+        (question.contains('기억') || question.contains('어제'))) {
+      return '‘$memory’ 기억나. 같이한 일이 좋았어!';
+    }
+    return '응, 나 여기 있어. 네가 오니까 좋아.';
+  }
+
+  Future<void> _album() => _sheet<void>('앨범·도감', [
+    if (_game.memories.isEmpty) const Text('사진이나 산책으로 첫 추억을 만들어보세요.'),
+    for (final memory in _game.memories.reversed)
+      ListTile(
+        contentPadding: EdgeInsets.zero,
+        leading: const Icon(Icons.photo_album_outlined),
+        title: Text(memory.title),
+        subtitle: Text('${memory.at.month}월 ${memory.at.day}일'),
+      ),
+    const Divider(),
+    const ListTile(
+      contentPadding: EdgeInsets.zero,
+      leading: Icon(Icons.pets),
+      title: Text('동글귀'),
+      subtitle: Text('기본 캐릭터'),
+    ),
+  ]);
+
+  Future<void> _settings() async {
+    final choice = await _sheet<String>('설정', [
+      ListTile(
+        contentPadding: EdgeInsets.zero,
+        leading: const Icon(Icons.memory),
+        title: Text(_voice == null ? '기본 대사 모드' : 'Kanana 연결됨'),
+        subtitle: Text(
+          petNativeModelAvailable
+              ? '기기에 내려받은 모델을 사용합니다.'
+              : 'Chrome 시연에서는 내장된 기본 대사를 사용해요.',
+        ),
+      ),
+      if (petNativeModelAvailable && _voice == null && _download == null)
+        OutlinedButton(
+          onPressed: () => Navigator.pop(context, 'download'),
+          child: const Text('Kanana 모델 받기 · 약 1.52 GB'),
+        ),
+      const Divider(),
+      const Text('시연 시계', style: TextStyle(fontWeight: FontWeight.bold)),
+      const Text(
+        '시연을 열어 첫날을 18시로 맞춘 뒤, 사과를 먹이고 원반으로 놀아주세요. 15시간과 24시간 시연은 각각 새로 시작하는 편이 정확해요.',
+      ),
+      const SizedBox(height: 8),
+      OutlinedButton(
+        onPressed: () => Navigator.pop(context, 'reset'),
+        child: const Text('시연 새로 시작 · 첫날 18시'),
+      ),
+      if (_game.demoClock) ...[
+        OutlinedButton(
+          onPressed: () => Navigator.pop(context, '15'),
+          child: const Text('15시간 뒤 재방문'),
+        ),
+        OutlinedButton(
+          onPressed: () => Navigator.pop(context, '24'),
+          child: const Text('24시간 뒤 재방문'),
+        ),
+      ],
+    ]);
+    if (!mounted || choice == null) return;
+    if (choice == 'download') {
+      unawaited(_downloadModel());
+      return;
+    }
+    if (choice == 'reset') {
+      final approved = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('새 시연을 시작할까요?'),
+          content: const Text('이 프로토타입에서 만든 현재 펫 기록이 새로 시작됩니다.'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('취소'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('새로 시작'),
+            ),
+          ],
+        ),
+      );
+      if (approved != true || !mounted) return;
+      final now = DateTime.now();
+      final demo = DateTime(now.year, now.month, now.day, 18);
+      setState(() {
+        _game = PetGame(demo)
+          ..timeOffsetMs = demo.difference(now).inMilliseconds
+          ..demoClock = true;
+        _position = _home;
+        _discPosition = null;
+        _canReplay = false;
+        _bubble = '안녕! 가방에서 소풍 장면을 골라보자.';
+      });
+    } else {
+      final target = _game.born.add(hour * int.parse(choice));
+      if (!target.isAfter(_game.at)) {
+        _notice('이미 이 시각을 지났어요. 시연을 새로 시작해주세요.');
+        return;
+      }
+      _game.timeOffsetMs = target.difference(DateTime.now()).inMilliseconds;
+      _canReplay = false;
+      _refresh();
+    }
+    _save();
+  }
+
+  Future<void> _downloadModel() async {
+    setState(() => _download = 0);
+    try {
+      await installPetModel((progress) {
+        if (mounted) setState(() => _download = progress);
+      });
+      if (!mounted) return;
+      await _loadVoice();
+      if (mounted && _voice != null) _notice('로컬 모델을 연결했어요.');
+    } catch (_) {
+      if (mounted) _notice('모델을 받지 못했어요. 설정에서 이어받을 수 있어요.');
+    } finally {
+      if (mounted) setState(() => _download = null);
+    }
+  }
+
+  String get _energyLabel =>
+      '${(_game.energy * 100 / _game.maxEnergy).toStringAsFixed(1)}%';
+
+  @override
+  Widget build(BuildContext context) {
+    if (!_ready) {
+      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    }
+    final now = _game.at;
+    return Scaffold(
+      body: SafeArea(
+        child: Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 590),
+            child: ListView(
+              padding: const EdgeInsets.fromLTRB(20, 20, 20, 22),
+              children: [
+                Row(
+                  children: [
+                    const Icon(Icons.pets, size: 17, color: forest),
+                    const SizedBox(width: 7),
+                    Text(
+                      '동글귀의 하루',
+                      style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                        color: forest,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                    const Spacer(),
+                    Text(
+                      '${now.month}월 ${now.day}일  ${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}',
+                      style: Theme.of(context).textTheme.labelMedium,
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 15),
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    Expanded(
+                      child: Text(
+                        '동글귀',
+                        style: Theme.of(context).textTheme.headlineLarge
+                            ?.copyWith(
+                              fontWeight: FontWeight.w900,
+                              letterSpacing: -1.4,
+                            ),
+                      ),
+                    ),
+                    Flexible(
+                      child: Chip(
+                        side: BorderSide.none,
+                        backgroundColor: _game.healthy
+                            ? mint
+                            : const Color(0xffffdfcb),
+                        label: Text(
+                          _game.healthLabel,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                Text(
+                  '${_game.stage} · Lv. ${_game.level}  ·  기분 ${_game.moodLabel}',
+                ),
+                const SizedBox(height: 13),
+                Row(
+                  children: [
+                    _metric(
+                      '포만감',
+                      '${_game.fullness}/${_game.maxFullness}',
+                      Icons.rice_bowl_outlined,
+                    ),
+                    const SizedBox(width: 8),
+                    _metric(
+                      '애정도',
+                      '${_game.affection}/${_game.nextAffection}',
+                      Icons.favorite_border,
+                    ),
+                    const SizedBox(width: 8),
+                    _metric(
+                      '배변',
+                      '${_game.waste}/3',
+                      Icons.water_drop_outlined,
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 13),
+                _scene(),
+                const SizedBox(height: 11),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 14,
+                    vertical: 10,
+                  ),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(13),
+                    border: Border.all(color: const Color(0xffe7ded0)),
+                  ),
+                  child: Row(
+                    children: [
+                      const Icon(
+                        Icons.chat_bubble_outline,
+                        size: 16,
+                        color: forest,
+                      ),
+                      const SizedBox(width: 9),
+                      Expanded(
+                        child: Text(
+                          _bubble,
+                          style: const TextStyle(fontSize: 14, height: 1.28),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                if (_storageError.isNotEmpty) Text(_storageError),
+                if (_download case final double progress) ...[
+                  const SizedBox(height: 8),
+                  LinearProgressIndicator(value: progress),
+                  Text('모델 받는 중 ${(progress * 100).round()}%'),
+                ],
+                const SizedBox(height: 13),
+                if (_canReplay && !_busy)
+                  OutlinedButton.icon(
+                    onPressed: _chooseThrow,
+                    icon: const Icon(Icons.replay),
+                    label: const Text('한 번 더 던지기'),
+                  ),
+                Row(
+                  children: [
+                    Expanded(
+                      child: FilledButton.icon(
+                        onPressed: _busy || !_game.alive ? null : _care,
+                        icon: const Icon(Icons.favorite_border),
+                        label: const Text('돌보기'),
+                      ),
+                    ),
+                    const SizedBox(width: 9),
+                    Expanded(
+                      child: FilledButton.tonalIcon(
+                        onPressed: _busy || !_game.alive ? null : _chat,
+                        icon: const Icon(Icons.chat_bubble_outline),
+                        label: Text('말 걸기 · $_energyLabel'),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 7),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    _shortcut(Icons.inventory_2_outlined, '가방', () => _bag()),
+                    _shortcut(Icons.collections_outlined, '앨범·도감', _album),
+                    _shortcut(Icons.settings_outlined, '설정', _settings),
+                  ],
+                ),
+                Text(
+                  _game.demoClock ? '시연 시계 사용 중' : '이 기기에 펫 기록을 저장해요.',
+                  textAlign: TextAlign.center,
+                  style: Theme.of(context).textTheme.labelSmall,
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _metric(String label, String value, IconData icon) => Expanded(
+    child: Container(
+      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 8),
+      decoration: BoxDecoration(
+        color: const Color(0xffefeadd),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Column(
+        children: [
+          Icon(icon, color: forest, size: 17),
+          Text(label, style: const TextStyle(fontSize: 11)),
+          Text(
+            value,
+            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+          ),
+        ],
+      ),
+    ),
+  );
+
+  Widget _shortcut(IconData icon, String label, VoidCallback press) =>
+      TextButton.icon(
+        onPressed: _busy ? null : press,
+        icon: Icon(icon, size: 19),
+        label: Text(label),
+      );
+
+  Widget _scene() => ClipRRect(
+    borderRadius: BorderRadius.circular(20),
+    child: AspectRatio(
+      aspectRatio: 1.5,
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final width = constraints.maxWidth;
+          final height = constraints.maxHeight;
+          final size =
+              width *
+              (.20 +
+                  (_game.level >= 5
+                      ? .04
+                      : _game.level >= 3
+                      ? .02
+                      : 0));
+          final disc = _discPosition;
+          return Stack(
+            fit: StackFit.expand,
+            children: [
+              Image.asset(
+                'assets/pet/${_game.inPark ? 'park' : 'room'}.png',
+                fit: BoxFit.fill,
+              ),
+              for (var index = 0; index < _game.waste && !_game.inPark; index++)
+                Positioned(
+                  left: width * (.64 + .065 * index),
+                  top: height * (.84 - .04 * index),
+                  child: const Text('💩', style: TextStyle(fontSize: 17)),
+                ),
+              if (disc != null)
+                Positioned(
+                  left: width * disc.dx - width * .026,
+                  top: height * disc.dy - 10,
+                  child: Transform.rotate(
+                    angle: -.25,
+                    child: Container(
+                      width: width * .065,
+                      height: width * .028,
+                      decoration: BoxDecoration(
+                        color: const Color(0xffffa12c),
+                        borderRadius: BorderRadius.circular(20),
+                        border: Border.all(
+                          color: const Color(0xff994624),
+                          width: 2,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              if (_game.alive)
+                AnimatedPositioned(
+                  duration: _moveDuration,
+                  curve: Curves.easeInOut,
+                  left: width * _position.dx - size / 2,
+                  top: height * _position.dy - size * .65,
+                  width: size,
+                  height: size * .7,
+                  child: Semantics(
+                    button: true,
+                    label: '동글귀 톡 누르기',
+                    child: GestureDetector(
+                      onTap: _tapPet,
+                      child: Stack(
+                        alignment: Alignment.bottomCenter,
+                        children: [
+                          Container(
+                            width: size * .62,
+                            height: size * .13,
+                            decoration: BoxDecoration(
+                              color: const Color(0x443d2514),
+                              borderRadius: BorderRadius.circular(100),
+                            ),
+                          ),
+                          AnimatedBuilder(
+                            animation: _idle,
+                            builder: (context, child) => Transform.translate(
+                              offset: Offset(0, _busy ? 0 : -2.5 * _idle.value),
+                              child: Transform.flip(
+                                flipX: _facingLeft,
+                                child: child,
+                              ),
+                            ),
+                            child: Image.asset(
+                              'assets/pet/dongle.png',
+                              fit: BoxFit.contain,
+                              filterQuality: FilterQuality.low,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              Positioned(
+                right: 9,
+                top: 9,
+                child: FilledButton.tonalIcon(
+                  onPressed: _busy || !_game.alive ? null : _changeLocation,
+                  icon: Icon(
+                    _game.inPark ? Icons.home_outlined : Icons.park_outlined,
+                    size: 17,
+                  ),
+                  label: Text(_game.inPark ? '집으로' : '공원 산책'),
+                ),
+              ),
+            ],
+          );
+        },
+      ),
+    ),
+  );
+}
