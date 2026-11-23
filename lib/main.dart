@@ -805,7 +805,7 @@ class _PetRoomState extends State<PetRoom> with SingleTickerProviderStateMixin {
               IconButton(
                 tooltip: '대화 닫기',
                 onPressed: _closeChat,
-                icon: const Icon(Icons.close),
+                icon: const Text('×', style: TextStyle(fontSize: 24)),
               ),
             ],
           ),
@@ -1387,7 +1387,9 @@ class _PetRoomState extends State<PetRoom> with SingleTickerProviderStateMixin {
                   child: const SizedBox(
                     width: 30,
                     height: 34,
-                    child: Icon(Icons.close, size: 15),
+                    child: Center(
+                      child: Text('×', style: TextStyle(fontSize: 18)),
+                    ),
                   ),
                 ),
               ),
@@ -1412,10 +1414,16 @@ class _PetRoomState extends State<PetRoom> with SingleTickerProviderStateMixin {
                 crossAxisAlignment: CrossAxisAlignment.center,
                 children: [
                   if (!toLeft)
-                    const Icon(Icons.arrow_left, color: paper, size: 14),
+                    const CustomPaint(
+                      size: Size(8, 12),
+                      painter: _BubbleTail(AxisDirection.left),
+                    ),
                   Expanded(child: box),
                   if (toLeft)
-                    const Icon(Icons.arrow_right, color: paper, size: 14),
+                    const CustomPaint(
+                      size: Size(8, 12),
+                      painter: _BubbleTail(AxisDirection.right),
+                    ),
                 ],
               )
             : Column(
@@ -1424,13 +1432,9 @@ class _PetRoomState extends State<PetRoom> with SingleTickerProviderStateMixin {
                   box,
                   Align(
                     alignment: Alignment(tailX, 0),
-                    child: const SizedBox(
-                      height: 9,
-                      child: Icon(
-                        Icons.arrow_drop_down,
-                        color: paper,
-                        size: 18,
-                      ),
+                    child: const CustomPaint(
+                      size: Size(12, 7),
+                      painter: _BubbleTail(AxisDirection.down),
                     ),
                   ),
                 ],
@@ -1438,4 +1442,26 @@ class _PetRoomState extends State<PetRoom> with SingleTickerProviderStateMixin {
       ),
     );
   }
+}
+
+class _BubbleTail extends CustomPainter {
+  const _BubbleTail(this.direction);
+
+  final AxisDirection direction;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final w = size.width;
+    final h = size.height;
+    final points = switch (direction) {
+      AxisDirection.left => [Offset(w, 0), Offset(0, h / 2), Offset(w, h)],
+      AxisDirection.right => [Offset.zero, Offset(w, h / 2), Offset(0, h)],
+      _ => [Offset.zero, Offset(w / 2, h), Offset(w, 0)],
+    };
+    canvas.drawPath(Path()..addPolygon(points, true), Paint()..color = paper);
+  }
+
+  @override
+  bool shouldRepaint(_BubbleTail oldDelegate) =>
+      direction != oldDelegate.direction;
 }
