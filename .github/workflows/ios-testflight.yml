@@ -20,20 +20,20 @@ on:
         type: boolean
         default: false
       duo_smoke:
-        description: Launch the app on the iPhone Duo simulator when the runner provides one
+        description: Run an independent iPhone Duo launch check, with no archive unless uploading
         type: boolean
         default: false
 
 permissions:
   contents: read
 
-concurrency:
-  group: donglgewi-testflight
-
 jobs:
   archive:
+    if: ${{ !inputs.duo_smoke || inputs.upload || inputs.patch_release != '' }}
     runs-on: xcode-27
     timeout-minutes: 25
+    concurrency:
+      group: donglgewi-testflight-archive
     steps:
       - uses: actions/checkout@v7
         with:
@@ -56,31 +56,6 @@ jobs:
             $1 > 27 || ($1 == 27 && $2 >= 1) { compatible = 1 }
             END { exit !compatible }
           '
-      - name: Launch on iPhone Duo simulator
-        id: duo
-        if: inputs.duo_smoke && inputs.patch_release == ''
-        run: |
-          device=$(xcrun simctl list devices available --json | jq -r '
-            [.devices[] | .[] | select(.name == "iPhone Duo") | .udid][0] // empty
-          ')
-          if [[ -z "$device" ]]; then
-            echo '::warning::This runner has no iPhone Duo simulator. Flutter layout tests still run.'
-            exit 0
-          fi
-          flutter build ios --simulator --debug --no-pub
-          xcrun simctl bootstatus "$device" -b
-          xcrun simctl install "$device" build/ios/iphonesimulator/Runner.app
-          xcrun simctl launch "$device" com.jordonpark.donglgewi
-          sleep 2
-          xcrun simctl spawn "$device" launchctl list | grep -F com.jordonpark.donglgewi
-          xcrun simctl io "$device" screenshot "$RUNNER_TEMP/donglgewi-duo.png"
-          echo 'screenshot=true' >> "$GITHUB_OUTPUT"
-      - name: Save iPhone Duo screenshot
-        if: steps.duo.outputs.screenshot == 'true'
-        uses: actions/upload-artifact@v7
-        with:
-          name: donglgewi-duo
-          path: ${{ runner.temp }}/donglgewi-duo.png
       - name: Set up Shorebird
         if: inputs.code_push || inputs.patch_release != ''
         uses: shorebirdtech/setup-shorebird@v1
@@ -153,3 +128,43 @@ jobs:
           shorebird patch ios --release-version="$RELEASE_VERSION" --track="$track" --no-codesign \
             --build-name="${RELEASE_VERSION%%+*}" --build-number="${RELEASE_VERSION##*+}" \
             "${asset_args[@]}"
+
+  duo-simulator:
+    if: inputs.duo_smoke && inputs.patch_release == ''
+    runs-on: xcode-27
+    timeout-minutes: 10
+    concurrency:
+      group: donglgewi-testflight-duo-simulator
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Set up Flutter 3.50.1
+        run: |
+          git clone --depth 1 --branch 3.50.1 https://github.com/flutter/flutter.git "$RUNNER_TEMP/flutter"
+          echo "$RUNNER_TEMP/flutter/bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/flutter/bin/flutter" pub get --enforce-lockfile
+      - name: Launch on iPhone Duo simulator
+        id: duo
+        run: |
+          device=$(xcrun simctl list devices available --json | jq -r '
+            [.devices[] | .[] | select(.name == "iPhone Duo") | .udid][0] // empty
+          ')
+          if [[ -z "$device" ]]; then
+            echo '::warning::This runner has no iPhone Duo simulator. Flutter layout tests still run.'
+            exit 0
+          fi
+          flutter build ios --simulator --debug --no-pub
+          xcrun simctl bootstatus "$device" -b
+          xcrun simctl install "$device" build/ios/iphonesimulator/Runner.app
+          xcrun simctl launch "$device" com.jordonpark.donglgewi
+          sleep 2
+          xcrun simctl spawn "$device" launchctl list | grep -F com.jordonpark.donglgewi
+          xcrun simctl io "$device" screenshot "$RUNNER_TEMP/donglgewi-duo.png"
+          echo 'screenshot=true' >> "$GITHUB_OUTPUT"
+      - name: Save iPhone Duo screenshot
+        if: steps.duo.outputs.screenshot == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: donglgewi-duo
+          path: ${{ runner.temp }}/donglgewi-duo.png
