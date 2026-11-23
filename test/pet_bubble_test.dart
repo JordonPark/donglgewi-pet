@@ -5,7 +5,7 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
-  testWidgets('Duo layout follows the native toolbar edge and keeps a draft', (
+  testWidgets('Duo controls stay on the right and preserve a chat draft', (
     tester,
   ) async {
     const layout = MethodChannel('donglgewi/layout');
@@ -28,13 +28,20 @@ void main() {
     await tester.pump();
     final stage = find.byKey(const ValueKey('pet-stage'));
     final controls = find.byKey(const ValueKey('room-controls'));
+    final dock = find.byKey(const ValueKey('compact-room-controls'));
     final artwork = find.byKey(const ValueKey('room-artwork'));
     expect(controls, findsNothing);
+    expect(dock, findsOneWidget);
     expect(tester.getTopLeft(stage).dx, greaterThanOrEqualTo(48));
     final care = find.text('돌보기');
     final talk = find.text('말 걸기');
-    expect(tester.getCenter(care).dy, tester.getCenter(talk).dy);
-    await tester.tap(find.text('말 걸기'));
+    expect(
+      tester.getCenter(care).dx,
+      greaterThan(tester.getTopRight(stage).dx),
+    );
+    expect(tester.getCenter(care).dx, tester.getCenter(talk).dx);
+    expect(tester.getCenter(care).dy, lessThan(tester.getCenter(talk).dy));
+    await tester.tap(talk);
     await tester.pump();
     final input = find.byType(EditableText);
     await tester.enterText(input, '우리 뭐 하고 놀까?');
@@ -44,7 +51,10 @@ void main() {
     await tester.pump();
     expect(controls, findsOneWidget);
     expect(tester.getTopLeft(controls).dx, greaterThanOrEqualTo(52));
-    expect(tester.getCenter(controls).dx, lessThan(tester.getCenter(stage).dx));
+    expect(
+      tester.getTopLeft(controls).dx,
+      greaterThan(tester.getTopRight(stage).dx),
+    );
     expect(
       tester.getTopLeft(artwork).dx,
       greaterThanOrEqualTo(tester.getTopLeft(stage).dx),
@@ -58,7 +68,10 @@ void main() {
     tester.view.viewInsets = const FakeViewPadding(bottom: 500);
     await tester.pump();
     expect(controls, findsOneWidget);
-    expect(tester.getCenter(input).dx, lessThan(tester.getTopLeft(stage).dx));
+    expect(
+      tester.getCenter(input).dx,
+      greaterThan(tester.getTopRight(stage).dx),
+    );
     expect(tester.getBottomLeft(input).dy, lessThan(322));
 
     await messenger.handlePlatformMessage(
@@ -79,8 +92,20 @@ void main() {
     tester.view.physicalSize = const Size(390, 844);
     await tester.pump();
     expect(controls, findsNothing);
+    expect(dock, findsNothing);
     expect(tester.widget<EditableText>(input).controller.text, '우리 뭐 하고 놀까?');
     expect(tester.getBottomLeft(input).dy, lessThan(344));
+
+    tester.view.viewInsets = FakeViewPadding.zero;
+    await tester.tap(find.byTooltip('대화 닫기'));
+    await tester.pump();
+    expect(dock, findsOneWidget);
+    expect(tester.getTopRight(dock).dx, lessThanOrEqualTo(338));
+
+    tester.view.physicalSize = const Size(340, 720);
+    await tester.pump();
+    expect(dock, findsNothing);
+    expect(tester.getCenter(care).dy, tester.getCenter(talk).dy);
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox.shrink());
   });

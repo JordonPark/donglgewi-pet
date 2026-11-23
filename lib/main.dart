@@ -1038,93 +1038,102 @@ class _PetRoomState extends State<PetRoom> with SingleTickerProviderStateMixin {
     return Scaffold(
       body: SafeArea(
         child: LayoutBuilder(
-          builder: (context, space) => space.maxWidth >= 620
-              ? _wideRoom(space, keyboardOpen)
-              : _compactRoom(keyboardOpen),
+          builder: (context, space) {
+            if (space.maxWidth >= 620) return _wideRoom(space, keyboardOpen);
+            final rightDock =
+                _toolbarSide != null &&
+                !keyboardOpen &&
+                space.maxWidth >= 304 &&
+                MediaQuery.textScalerOf(context).scale(13) <= 18;
+            return _compactRoom(keyboardOpen, rightDock: rightDock);
+          },
         ),
       ),
     );
   }
 
-  Widget _compactRoom(bool keyboardOpen) => Center(
+  Widget _compactRoom(bool keyboardOpen, {required bool rightDock}) => Center(
     child: ConstrainedBox(
       constraints: const BoxConstraints(maxWidth: 610),
       child: Column(
         children: [
           Expanded(
-            child: LayoutBuilder(
-              builder: (context, space) {
-                final roomy =
-                    !keyboardOpen &&
-                    space.maxHeight >= 560 &&
-                    MediaQuery.textScalerOf(context).scale(14) <= 18 &&
-                    _storageError.isEmpty &&
-                    _download == null;
-                if (roomy) {
-                  return Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 16, 16, 14),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        _identity(),
-                        const SizedBox(height: 12),
-                        Expanded(child: _scene(immersive: true)),
-                        if (!_game.alive) Text(_bubble),
-                        const SizedBox(height: 12),
-                        _status(),
-                        const SizedBox(height: 12),
-                        _actions(),
-                        _shortcuts(),
-                        ..._messages(),
-                      ],
-                    ),
-                  );
-                }
-                return ListView(
-                  key: ValueKey(keyboardOpen),
-                  padding: EdgeInsets.fromLTRB(
-                    16,
-                    keyboardOpen ? 4 : 16,
-                    16,
-                    14,
-                  ),
-                  children: [
-                    if (!keyboardOpen) ...[
-                      _identity(),
-                      const SizedBox(height: 12),
-                    ],
-                    Center(
-                      child: ConstrainedBox(
-                        constraints: BoxConstraints(
-                          maxWidth: keyboardOpen
-                              ? math.max(120, (space.maxHeight - 12) * 1.5)
-                              : 610,
-                        ),
-                        child: _scene(),
-                      ),
-                    ),
-                    if (!_game.alive)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 8),
-                        child: Text(_bubble),
-                      ),
-                    if (!keyboardOpen) ...[
-                      const SizedBox(height: 12),
-                      _status(),
-                      const SizedBox(height: 12),
-                      _actions(),
-                      _shortcuts(),
-                      ..._messages(),
-                    ],
-                  ],
-                );
-              },
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              textDirection: TextDirection.ltr,
+              children: [
+                Expanded(child: _compactScene(keyboardOpen, rightDock)),
+                if (rightDock) _compactDock(),
+              ],
             ),
           ),
           if (_chatOpen && _game.alive) _composer(),
         ],
       ),
     ),
+  );
+
+  Widget _compactScene(bool keyboardOpen, bool rightDock) => LayoutBuilder(
+    builder: (context, space) {
+      final roomy =
+          !keyboardOpen &&
+          space.maxHeight >= 560 &&
+          MediaQuery.textScalerOf(context).scale(14) <= 18 &&
+          _storageError.isEmpty &&
+          _download == null;
+      final padding = EdgeInsets.fromLTRB(
+        16,
+        keyboardOpen ? 4 : 16,
+        rightDock ? 10 : 16,
+        14,
+      );
+      final status = [
+        const SizedBox(height: 12),
+        _status(),
+        const SizedBox(height: 12),
+        _actions(showPrimary: !rightDock),
+        if (!rightDock) _shortcuts(),
+        ..._messages(),
+      ];
+      if (roomy) {
+        return Padding(
+          padding: padding,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              _identity(),
+              const SizedBox(height: 12),
+              Expanded(child: _scene(immersive: true)),
+              if (!_game.alive) Text(_bubble),
+              ...status,
+            ],
+          ),
+        );
+      }
+      return ListView(
+        key: ValueKey(keyboardOpen),
+        padding: padding,
+        children: [
+          if (!keyboardOpen) ...[_identity(), const SizedBox(height: 12)],
+          Center(
+            child: ConstrainedBox(
+              constraints: BoxConstraints(
+                maxWidth: keyboardOpen
+                    ? math.max(120, (space.maxHeight - 12) * 1.5)
+                    : 610,
+              ),
+              child: _scene(),
+            ),
+          ),
+          if (!_game.alive)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: Text(_bubble),
+            ),
+          if (!keyboardOpen) ...status,
+        ],
+      );
+    },
   );
 
   Widget _wideRoom(BoxConstraints space, bool keyboardOpen) {
@@ -1134,9 +1143,7 @@ class _PetRoomState extends State<PetRoom> with SingleTickerProviderStateMixin {
       child: Row(
         key: const ValueKey('wide-room'),
         crossAxisAlignment: CrossAxisAlignment.stretch,
-        textDirection: _toolbarSide == 'left'
-            ? TextDirection.rtl
-            : TextDirection.ltr,
+        textDirection: TextDirection.ltr,
         children: [
           Expanded(child: _scene(immersive: true)),
           const SizedBox(width: 16),
@@ -1299,10 +1306,15 @@ class _PetRoomState extends State<PetRoom> with SingleTickerProviderStateMixin {
     ),
   );
 
-  Widget _actions({bool stacked = false}) {
+  VoidCallback? get _careAction => _busy || !_game.alive ? null : _care;
+
+  VoidCallback? get _talkAction =>
+      _busy || !_game.alive || _chatOpen ? null : _openChat;
+
+  Widget _actions({bool stacked = false, bool showPrimary = true}) {
     const target = Size(0, 48);
     final care = FilledButton.icon(
-      onPressed: _busy || !_game.alive ? null : _care,
+      onPressed: _careAction,
       style: FilledButton.styleFrom(
         minimumSize: target,
         padding: const EdgeInsets.symmetric(horizontal: 10),
@@ -1311,7 +1323,7 @@ class _PetRoomState extends State<PetRoom> with SingleTickerProviderStateMixin {
       label: const Text('돌보기'),
     );
     final talk = FilledButton.tonalIcon(
-      onPressed: _busy || !_game.alive || _chatOpen ? null : _openChat,
+      onPressed: _talkAction,
       style: FilledButton.styleFrom(
         minimumSize: target,
         padding: const EdgeInsets.symmetric(horizontal: 10),
@@ -1351,22 +1363,23 @@ class _PetRoomState extends State<PetRoom> with SingleTickerProviderStateMixin {
               minHeight: 4,
             ),
           ),
-          const SizedBox(height: 10),
+          if (showPrimary) const SizedBox(height: 10),
         ],
-        if (_chatOpen)
-          care
-        else if (vertical) ...[
-          care,
-          const SizedBox(height: 6),
-          talk,
-        ] else
-          Row(
-            children: [
-              Expanded(child: care),
-              const SizedBox(width: 8),
-              Expanded(child: talk),
-            ],
-          ),
+        if (showPrimary)
+          if (_chatOpen)
+            care
+          else if (vertical) ...[
+            care,
+            const SizedBox(height: 6),
+            talk,
+          ] else
+            Row(
+              children: [
+                Expanded(child: care),
+                const SizedBox(width: 8),
+                Expanded(child: talk),
+              ],
+            ),
         if (_canReplay && !_busy)
           OutlinedButton.icon(
             onPressed: _chooseThrow,
@@ -1387,38 +1400,96 @@ class _PetRoomState extends State<PetRoom> with SingleTickerProviderStateMixin {
     if (_game.demoClock) const Text('시연 시계 사용 중', textAlign: TextAlign.center),
   ];
 
-  Widget _shortcuts({bool vertical = false}) {
-    final buttons =
-        [
-          (Icons.inventory_2_outlined, '가방', () => _bag()),
-          (Icons.collections_outlined, '앨범·도감', _album),
-          (Icons.settings_outlined, '설정', _settings),
-        ].map(
-          (item) => TextButton(
-            onPressed: _busy ? null : item.$3,
-            style: TextButton.styleFrom(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-              minimumSize: const Size(0, 48),
+  List<(IconData, String, VoidCallback)> get _menuActions => [
+    (Icons.inventory_2_outlined, '가방', _bag),
+    (Icons.collections_outlined, '앨범·도감', _album),
+    (Icons.settings_outlined, '설정', _settings),
+  ];
+
+  Widget _compactDock() {
+    final actionStyle = FilledButton.styleFrom(
+      minimumSize: const Size(0, 48),
+      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
+    );
+    return SizedBox(
+      key: const ValueKey('compact-room-controls'),
+      width: 86,
+      child: Align(
+        alignment: Alignment.bottomCenter,
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.only(right: 12, bottom: 14, top: 12),
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              color: const Color(0xfff7f2e9),
+              borderRadius: BorderRadius.circular(18),
+              border: Border.all(color: const Color(0xffe8e0d1)),
             ),
-            child: vertical
-                ? Row(
-                    children: [
-                      Icon(item.$1, size: 18),
-                      const SizedBox(width: 10),
-                      Expanded(child: Text(item.$2)),
-                      const ExcludeSemantics(child: Text('›')),
-                    ],
-                  )
-                : Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(item.$1, size: 17),
-                      const SizedBox(height: 2),
-                      Text(item.$2, textAlign: TextAlign.center),
-                    ],
+            child: Padding(
+              padding: const EdgeInsets.all(5),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  FilledButton(
+                    style: actionStyle,
+                    onPressed: _careAction,
+                    child: _iconLabel(Icons.favorite_border, '돌보기'),
                   ),
+                  if (!_chatOpen) ...[
+                    const SizedBox(height: 4),
+                    FilledButton.tonal(
+                      style: actionStyle,
+                      onPressed: _talkAction,
+                      child: _iconLabel(Icons.chat_bubble_outline, '말 걸기'),
+                    ),
+                  ],
+                  const Divider(height: 10),
+                  for (final (icon, label, onPressed) in _menuActions)
+                    TextButton(
+                      onPressed: _busy ? null : onPressed,
+                      style: TextButton.styleFrom(
+                        minimumSize: const Size(0, 48),
+                        padding: const EdgeInsets.symmetric(vertical: 6),
+                      ),
+                      child: _iconLabel(icon, label),
+                    ),
+                ],
+              ),
+            ),
           ),
-        );
+        ),
+      ),
+    );
+  }
+
+  Widget _iconLabel(IconData icon, String label) => Column(
+    mainAxisSize: MainAxisSize.min,
+    children: [
+      Icon(icon, size: 17),
+      const SizedBox(height: 2),
+      Text(label, textAlign: TextAlign.center),
+    ],
+  );
+
+  Widget _shortcuts({bool vertical = false}) {
+    final buttons = _menuActions.map(
+      (item) => TextButton(
+        onPressed: _busy ? null : item.$3,
+        style: TextButton.styleFrom(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+          minimumSize: const Size(0, 48),
+        ),
+        child: vertical
+            ? Row(
+                children: [
+                  Icon(item.$1, size: 18),
+                  const SizedBox(width: 10),
+                  Expanded(child: Text(item.$2)),
+                  const ExcludeSemantics(child: Text('›')),
+                ],
+              )
+            : _iconLabel(item.$1, item.$2),
+      ),
+    );
     return vertical
         ? Column(children: buttons.toList())
         : Row(
