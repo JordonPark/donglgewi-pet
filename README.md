@@ -21,6 +21,6 @@ flutter run -d chrome
 
 Android 앱 ID와 iOS 번들 ID는 모두 `com.jordonpark.donglgewi`입니다. iOS 16.4 이상을 대상으로 합니다. GitHub Actions의 **Donglgewi TestFlight**에서 **Build a Shorebird release for TestFlight**와 **Upload**를 선택하면 내부 테스트용 OTA 기준 빌드를 올립니다. 이 빌드를 설치한 후에는 **Publish a patch to the exact internal release**에 `0.1.0+3`처럼 해당 버전과 빌드 번호를 입력해 Dart 변경을 배포할 수 있습니다. 앱을 실행하면 패치를 확인하며, 내려받은 패치는 다음 실행부터 적용됩니다. 전체 빌드에는 Apple 팀 변수와 App Store Connect 키가, OTA 릴리스 및 패치에는 `SHOREBIRD_TOKEN`이 필요합니다.
 
-iPhone Duo의 접힌 화면은 장면과 돌봄 버튼을 세로로 표시하고, 펼쳐진 화면은 장면과 조작 패널을 나눠 보여줍니다. iOS 27.1의 시스템 막대 방향을 읽어 조작 패널이 왼쪽이나 오른쪽에 놓이도록 하고, 안전 영역으로 화면 가림을 피합니다. 새 iOS 빌드는 iOS 27.1 SDK 이상을 사용합니다.
+iPhone Duo를 펼치면 왼쪽에 장면, 오른쪽에 조작 영역을 표시합니다. 접힌 화면에서도 iOS가 세로 막대를 표시하고 공간이 충분하면 주요 버튼이 오른쪽에 놓입니다. 화면 크기와 안전 영역이 바뀌어도 작성 중인 대화가 유지됩니다. 새 iOS 빌드는 iOS 27.1 SDK 이상을 사용합니다.
 
 [프로토타입 기획서](docs/local-llm-pet-prototype.md) · [Kanana 모델과 라이선스](assets/kanana-notice.txt) · [Noto Sans KR 라이선스](assets/pet/NotoSansKR-OFL.txt)
