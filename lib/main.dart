@@ -830,9 +830,7 @@ class _PetRoomState extends State<PetRoom> with SingleTickerProviderStateMixin {
   Widget _composer({bool inRail = false}) => Material(
     key: _composerKey,
     color: paper,
-    borderRadius: inRail
-        ? const BorderRadius.vertical(bottom: Radius.circular(22))
-        : BorderRadius.zero,
+    borderRadius: inRail ? BorderRadius.circular(20) : BorderRadius.zero,
     child: Padding(
       padding: EdgeInsets.fromLTRB(12, 4, 12, inRail ? 12 : 6),
       child: Column(
@@ -1145,65 +1143,63 @@ class _PetRoomState extends State<PetRoom> with SingleTickerProviderStateMixin {
           SizedBox(
             key: const ValueKey('room-controls'),
             width: controlWidth,
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                color: const Color(0xfff7f2e9),
-                borderRadius: BorderRadius.circular(22),
-                border: Border.all(color: const Color(0xffe8e0d1)),
-              ),
-              child: Column(
-                children: [
-                  Expanded(
-                    child: LayoutBuilder(
-                      builder: (context, rail) => SingleChildScrollView(
-                        padding: const EdgeInsets.all(14),
-                        child: ConstrainedBox(
-                          constraints: BoxConstraints(
-                            minHeight: math.max(0, rail.maxHeight - 28),
-                          ),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.stretch,
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                            children: [
+            child: Column(
+              children: [
+                Expanded(
+                  child: LayoutBuilder(
+                    builder: (context, rail) => SingleChildScrollView(
+                      child: ConstrainedBox(
+                        constraints: BoxConstraints(minHeight: rail.maxHeight),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            _controlCard(
                               Column(
                                 crossAxisAlignment: CrossAxisAlignment.stretch,
                                 children: [
                                   _identity(),
                                   const SizedBox(height: 16),
                                   _status(),
+                                  if (!keyboardOpen) ...[
+                                    const SizedBox(height: 10),
+                                    const Divider(height: 1),
+                                    _shortcuts(vertical: true),
+                                  ],
                                   if (!_game.alive) Text(_bubble),
                                   ..._messages(),
                                 ],
                               ),
-                              if (!keyboardOpen)
-                                Padding(
-                                  padding: const EdgeInsets.only(top: 18),
-                                  child: Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.stretch,
-                                    children: [
-                                      _actions(stacked: true),
-                                      const SizedBox(height: 10),
-                                      const Divider(height: 1),
-                                      _shortcuts(vertical: true),
-                                    ],
-                                  ),
-                                ),
-                            ],
-                          ),
+                            ),
+                            if (!keyboardOpen)
+                              Padding(
+                                padding: const EdgeInsets.only(top: 12),
+                                child: _controlCard(_actions(stacked: true)),
+                              ),
+                          ],
                         ),
                       ),
                     ),
                   ),
-                  if (_chatOpen && _game.alive) _composer(inRail: true),
-                ],
-              ),
+                ),
+                if (_chatOpen && _game.alive) _composer(inRail: true),
+              ],
             ),
           ),
         ],
       ),
     );
   }
+
+  Widget _controlCard(Widget child) => Container(
+    decoration: BoxDecoration(
+      color: const Color(0xfff7f2e9),
+      borderRadius: BorderRadius.circular(20),
+      border: Border.all(color: const Color(0xffe8e0d1)),
+    ),
+    padding: const EdgeInsets.all(13),
+    child: child,
+  );
 
   Widget _identity() => LayoutBuilder(
     builder: (context, space) {
