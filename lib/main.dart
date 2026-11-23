@@ -4,8 +4,13 @@ import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart'
-    show LicenseEntryWithLineBreaks, LicenseRegistry;
-import 'package:flutter/services.dart' show rootBundle;
+    show
+        LicenseEntryWithLineBreaks,
+        LicenseRegistry,
+        defaultTargetPlatform,
+        kIsWeb;
+import 'package:flutter/services.dart'
+    show MethodChannel, MissingPluginException, PlatformException, rootBundle;
 import 'package:image_picker/image_picker.dart';
 import 'package:material_ui/material_ui.dart';
 
@@ -66,9 +71,11 @@ class PetRoom extends StatefulWidget {
 class _PetRoomState extends State<PetRoom> with SingleTickerProviderStateMixin {
   static const _home = Offset(.51, .82);
   static const _park = Offset(.52, .59);
+  static const _layoutChannel = MethodChannel('donglgewi/layout');
   final _picker = ImagePicker();
   final _message = TextEditingController();
   final _messageFocus = FocusNode();
+  final _composerKey = GlobalKey();
   late final AnimationController _idle;
   late PetGame _game;
   PetVoice? _voice;
@@ -90,6 +97,10 @@ class _PetRoomState extends State<PetRoom> with SingleTickerProviderStateMixin {
   double? _download;
   String _bubble = '안녕! 우리 방에 온 걸 환영해.';
   String _storageError = '';
+  String? _toolbarSide;
+
+  bool get _usesIosLayout =>
+      !kIsWeb && defaultTargetPlatform == TargetPlatform.iOS;
 
   @override
   void initState() {
@@ -98,7 +109,36 @@ class _PetRoomState extends State<PetRoom> with SingleTickerProviderStateMixin {
       vsync: this,
       duration: const Duration(seconds: 3),
     )..repeat(reverse: true);
+    if (_usesIosLayout) {
+      _layoutChannel.setMethodCallHandler((call) async {
+        if (call.method == 'toolbarSideChanged') {
+          _setToolbarSide(call.arguments);
+        }
+      });
+      unawaited(_readToolbarSide());
+    }
     unawaited(_restore());
+  }
+
+  Future<void> _readToolbarSide() async {
+    try {
+      _setToolbarSide(await _layoutChannel.invokeMethod<String>('toolbarSide'));
+    } on MissingPluginException {
+      // Older preview builds can lay out the game without the native hint.
+    } on PlatformException {
+      // SafeArea and window constraints still govern the layout.
+    }
+  }
+
+  void _setToolbarSide(Object? side) {
+    final position = switch (side) {
+      'left' => 'left',
+      'right' => 'right',
+      _ => null,
+    };
+    if (mounted && _toolbarSide != position) {
+      setState(() => _toolbarSide = position);
+    }
   }
 
   Future<void> _restore() async {
@@ -149,6 +189,7 @@ class _PetRoomState extends State<PetRoom> with SingleTickerProviderStateMixin {
   @override
   void dispose() {
     _timer?.cancel();
+    if (_usesIosLayout) _layoutChannel.setMethodCallHandler(null);
     _idle.dispose();
     _message.dispose();
     _messageFocus.dispose();
@@ -785,6 +826,7 @@ class _PetRoomState extends State<PetRoom> with SingleTickerProviderStateMixin {
   }
 
   Widget _composer() => Material(
+    key: _composerKey,
     color: paper,
     child: Padding(
       padding: const EdgeInsets.fromLTRB(16, 4, 16, 6),
@@ -987,226 +1029,295 @@ class _PetRoomState extends State<PetRoom> with SingleTickerProviderStateMixin {
     if (!_ready) {
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
-    final now = _game.at;
     final keyboardOpen =
         _chatOpen && MediaQuery.viewInsetsOf(context).bottom > 0;
     return Scaffold(
       body: SafeArea(
-        child: Center(
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 590),
-            child: Column(
-              children: [
-                Expanded(
-                  child: LayoutBuilder(
-                    builder: (context, constraints) => ListView(
-                      key: ValueKey(keyboardOpen),
-                      padding: EdgeInsets.fromLTRB(
-                        20,
-                        keyboardOpen ? 6 : 20,
-                        20,
-                        16,
-                      ),
-                      children: [
-                        if (!keyboardOpen) ...[
-                          Row(
-                            children: [
-                              const Icon(Icons.pets, size: 17, color: forest),
-                              const SizedBox(width: 7),
-                              Text(
-                                '동글귀의 하루',
-                                style: Theme.of(context).textTheme.labelLarge
-                                    ?.copyWith(
-                                      color: forest,
-                                      fontWeight: FontWeight.w800,
-                                    ),
-                              ),
-                              const Spacer(),
-                              Text(
-                                '${now.month}월 ${now.day}일  ${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}',
-                                style: Theme.of(context).textTheme.labelMedium,
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 15),
-                          Row(
-                            crossAxisAlignment: CrossAxisAlignment.end,
-                            children: [
-                              Expanded(
-                                child: Text(
-                                  '동글귀',
-                                  style: Theme.of(context)
-                                      .textTheme
-                                      .headlineLarge
-                                      ?.copyWith(
-                                        fontWeight: FontWeight.w900,
-                                        letterSpacing: -1.4,
-                                      ),
-                                ),
-                              ),
-                              Flexible(
-                                child: Chip(
-                                  side: BorderSide.none,
-                                  backgroundColor: _game.healthy
-                                      ? mint
-                                      : const Color(0xffffdfcb),
-                                  label: Text(
-                                    _game.healthLabel,
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ),
-                          Text(
-                            '${_game.stage} · Lv. ${_game.level}  ·  기분 ${_game.moodLabel}',
-                          ),
-                          const SizedBox(height: 13),
-                          Row(
-                            children: [
-                              _metric(
-                                '포만감',
-                                '${_game.fullness}/${_game.maxFullness}',
-                                Icons.rice_bowl_outlined,
-                              ),
-                              const SizedBox(width: 8),
-                              _metric(
-                                '애정도',
-                                '${_game.affection}/${_game.nextAffection}',
-                                Icons.favorite_border,
-                              ),
-                              const SizedBox(width: 8),
-                              _metric(
-                                '배변',
-                                '${_game.waste}/3',
-                                Icons.water_drop_outlined,
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 13),
-                        ],
-                        Center(
-                          child: ConstrainedBox(
-                            constraints: BoxConstraints(
-                              maxWidth: keyboardOpen
-                                  ? math.max(
-                                      120,
-                                      (constraints.maxHeight - 10) * 1.5,
-                                    )
-                                  : 590,
-                            ),
-                            child: _scene(),
-                          ),
-                        ),
-                        if (!_game.alive)
-                          Text(_bubble, textAlign: TextAlign.center),
-                        if (!keyboardOpen) ...[
-                          if (_storageError.isNotEmpty) Text(_storageError),
-                          if (_download case final double progress) ...[
-                            const SizedBox(height: 8),
-                            LinearProgressIndicator(value: progress),
-                            Text('모델 받는 중 ${(progress * 100).round()}%'),
-                          ],
-                          const SizedBox(height: 13),
-                          if (_canReplay && !_busy)
-                            OutlinedButton.icon(
-                              onPressed: _chooseThrow,
-                              icon: const Icon(Icons.replay),
-                              label: const Text('한 번 더 던지기'),
-                            ),
-                          Row(
-                            children: [
-                              Expanded(
-                                child: FilledButton.icon(
-                                  onPressed: _busy || !_game.alive
-                                      ? null
-                                      : _care,
-                                  icon: const Icon(Icons.favorite_border),
-                                  label: const Text('돌보기'),
-                                ),
-                              ),
-                              const SizedBox(width: 9),
-                              Expanded(
-                                child: FilledButton.tonalIcon(
-                                  onPressed: _busy || !_game.alive || _chatOpen
-                                      ? null
-                                      : _openChat,
-                                  icon: const Icon(Icons.chat_bubble_outline),
-                                  label: Text('말 걸기 · $_energyLabel'),
-                                ),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 7),
-                          Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                            children: [
-                              _shortcut(
-                                Icons.inventory_2_outlined,
-                                '가방',
-                                () => _bag(),
-                              ),
-                              _shortcut(
-                                Icons.collections_outlined,
-                                '앨범·도감',
-                                _album,
-                              ),
-                              _shortcut(
-                                Icons.settings_outlined,
-                                '설정',
-                                _settings,
-                              ),
-                            ],
-                          ),
-                          Text(
-                            _game.demoClock
-                                ? '시연 시계 사용 중'
-                                : '이 기기에 펫 기록을 저장해요.',
-                            textAlign: TextAlign.center,
-                            style: Theme.of(context).textTheme.labelSmall,
-                          ),
-                        ],
-                      ],
-                    ),
-                  ),
-                ),
-                if (_chatOpen && _game.alive) _composer(),
-              ],
-            ),
-          ),
+        child: LayoutBuilder(
+          builder: (context, space) =>
+              space.maxWidth >= 620 && space.maxHeight >= 340
+              ? _wideRoom(space)
+              : _compactRoom(keyboardOpen),
         ),
       ),
     );
   }
 
-  Widget _metric(String label, String value, IconData icon) => Expanded(
-    child: Container(
-      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 8),
-      decoration: BoxDecoration(
-        color: const Color(0xffefeadd),
-        borderRadius: BorderRadius.circular(12),
-      ),
+  Widget _compactRoom(bool keyboardOpen) => Center(
+    child: ConstrainedBox(
+      constraints: const BoxConstraints(maxWidth: 610),
       child: Column(
         children: [
-          Icon(icon, color: forest, size: 17),
-          Text(label, style: const TextStyle(fontSize: 11)),
-          Text(
-            value,
-            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+          Expanded(
+            child: LayoutBuilder(
+              builder: (context, space) => ListView(
+                key: ValueKey(keyboardOpen),
+                padding: EdgeInsets.fromLTRB(16, keyboardOpen ? 4 : 16, 16, 14),
+                children: [
+                  if (!keyboardOpen) ...[
+                    _identity(),
+                    const SizedBox(height: 12),
+                  ],
+                  Center(
+                    child: ConstrainedBox(
+                      constraints: BoxConstraints(
+                        maxWidth: keyboardOpen
+                            ? math.max(120, (space.maxHeight - 12) * 1.5)
+                            : 610,
+                      ),
+                      child: _scene(),
+                    ),
+                  ),
+                  if (!_game.alive)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 8),
+                      child: Text(_bubble),
+                    ),
+                  if (!keyboardOpen) ...[
+                    const SizedBox(height: 12),
+                    _status(),
+                    const SizedBox(height: 12),
+                    _actions(context),
+                    ..._messages(),
+                  ],
+                ],
+              ),
+            ),
           ),
+          if (_chatOpen && _game.alive) _composer(),
         ],
       ),
     ),
   );
 
+  Widget _wideRoom(BoxConstraints space) {
+    final controlWidth = (space.maxWidth * .34).clamp(232.0, 320.0);
+    return Padding(
+      padding: const EdgeInsets.all(18),
+      child: Row(
+        key: const ValueKey('wide-room'),
+        textDirection: _toolbarSide == 'left'
+            ? TextDirection.rtl
+            : TextDirection.ltr,
+        children: [
+          Expanded(
+            child: Center(
+              child: ConstrainedBox(
+                constraints: BoxConstraints(
+                  maxWidth: math.max(160, (space.maxHeight - 36) * 1.5),
+                ),
+                child: _scene(),
+              ),
+            ),
+          ),
+          const SizedBox(width: 16),
+          SizedBox(
+            key: const ValueKey('room-controls'),
+            width: controlWidth,
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                color: const Color(0xfff3ede2),
+                borderRadius: BorderRadius.circular(22),
+              ),
+              child: ListView(
+                keyboardDismissBehavior:
+                    ScrollViewKeyboardDismissBehavior.onDrag,
+                padding: const EdgeInsets.all(14),
+                children: [
+                  _identity(),
+                  const SizedBox(height: 12),
+                  _status(),
+                  const SizedBox(height: 12),
+                  if (!_game.alive) Text(_bubble),
+                  if (_chatOpen && _game.alive) _composer(),
+                  _actions(context, stacked: true),
+                  ..._messages(),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _identity() => LayoutBuilder(
+    builder: (context, space) {
+      final title = Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            '동글귀',
+            style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+              fontWeight: FontWeight.w800,
+              letterSpacing: -.9,
+            ),
+          ),
+          Text(
+            '${_game.stage} · Lv. ${_game.level} · 기분 ${_game.moodLabel}',
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+        ],
+      );
+      final health = Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        decoration: BoxDecoration(
+          color: _game.healthy ? mint : const Color(0xffffdfcb),
+          borderRadius: BorderRadius.circular(18),
+        ),
+        child: Text(
+          _game.healthLabel,
+          style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700),
+        ),
+      );
+      if (space.maxWidth < 270 ||
+          MediaQuery.textScalerOf(context).scale(14) > 19) {
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [title, const SizedBox(height: 6), health],
+        );
+      }
+      return Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          Expanded(child: title),
+          const SizedBox(width: 8),
+          Flexible(child: health),
+        ],
+      );
+    },
+  );
+
+  Widget _status() => Container(
+    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+    decoration: BoxDecoration(
+      color: const Color(0xffeee9df),
+      borderRadius: BorderRadius.circular(13),
+    ),
+    child: Wrap(
+      spacing: 17,
+      runSpacing: 4,
+      children: [
+        _stat('포만감', '${_game.fullness}/${_game.maxFullness}'),
+        _stat('애정도', '${_game.affection}/${_game.nextAffection}'),
+        _stat('배변', '${_game.waste}/3'),
+      ],
+    ),
+  );
+
+  Widget _stat(String label, String value) => Text.rich(
+    TextSpan(
+      text: '$label ',
+      style: const TextStyle(fontSize: 13),
+      children: [
+        TextSpan(
+          text: value,
+          style: const TextStyle(fontWeight: FontWeight.w800),
+        ),
+      ],
+    ),
+  );
+
+  Widget _actions(BuildContext context, {bool stacked = false}) {
+    final care = FilledButton.icon(
+      onPressed: _busy || !_game.alive ? null : _care,
+      icon: const Icon(Icons.favorite_border, size: 19),
+      label: const Text('돌보기'),
+    );
+    final talk = FilledButton.tonalIcon(
+      onPressed: _busy || !_game.alive || _chatOpen ? null : _openChat,
+      icon: const Icon(Icons.chat_bubble_outline, size: 18),
+      label: const Text('말 걸기'),
+    );
+    final vertical = stacked || MediaQuery.textScalerOf(context).scale(14) > 20;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (!_chatOpen) ...[
+          Semantics(
+            label: '대화 체력 $_energyLabel',
+            child: ExcludeSemantics(
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      '대화 체력',
+                      style: Theme.of(context).textTheme.labelMedium,
+                    ),
+                  ),
+                  Text(
+                    _energyLabel,
+                    style: const TextStyle(fontWeight: FontWeight.w700),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 4),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(5),
+            child: LinearProgressIndicator(
+              value: _game.energy / _game.maxEnergy,
+              minHeight: 4,
+            ),
+          ),
+          const SizedBox(height: 10),
+        ],
+        if (vertical) ...[
+          care,
+          const SizedBox(height: 6),
+          talk,
+        ] else
+          Row(
+            children: [
+              Expanded(child: care),
+              const SizedBox(width: 8),
+              Expanded(child: talk),
+            ],
+          ),
+        if (_canReplay && !_busy)
+          OutlinedButton.icon(
+            onPressed: _chooseThrow,
+            icon: const Icon(Icons.replay),
+            label: const Text('한 번 더 던지기'),
+          ),
+        const SizedBox(height: 2),
+        Wrap(
+          spacing: 4,
+          runSpacing: 0,
+          alignment: stacked ? WrapAlignment.start : WrapAlignment.spaceBetween,
+          children: [
+            _shortcut(Icons.inventory_2_outlined, '가방', () => _bag()),
+            _shortcut(Icons.collections_outlined, '앨범·도감', _album),
+            _shortcut(Icons.settings_outlined, '설정', _settings),
+          ],
+        ),
+      ],
+    );
+  }
+
+  List<Widget> _messages() => [
+    if (_storageError.isNotEmpty) Text(_storageError),
+    if (_download case final double progress) ...[
+      const SizedBox(height: 8),
+      LinearProgressIndicator(value: progress),
+      Text('모델 받는 중 ${(progress * 100).round()}%'),
+    ],
+    if (_game.demoClock) const Text('시연 시계 사용 중', textAlign: TextAlign.center),
+  ];
+
   Widget _shortcut(IconData icon, String label, VoidCallback press) =>
       TextButton.icon(
         onPressed: _busy ? null : press,
-        icon: Icon(icon, size: 19),
+        icon: Icon(icon, size: 17),
         label: Text(label),
+        style: TextButton.styleFrom(
+          padding: const EdgeInsets.symmetric(horizontal: 8),
+        ),
       );
 
   Widget _scene() => ClipRRect(
+    key: const ValueKey('pet-stage'),
     borderRadius: BorderRadius.circular(20),
     child: AspectRatio(
       aspectRatio: 1.5,
@@ -1327,6 +1438,11 @@ class _PetRoomState extends State<PetRoom> with SingleTickerProviderStateMixin {
                         size: 17,
                       ),
                       label: Text(_game.inPark ? '집으로' : '공원 산책'),
+                      style: FilledButton.styleFrom(
+                        backgroundColor: paper.withValues(alpha: .94),
+                        padding: const EdgeInsets.symmetric(horizontal: 10),
+                        textStyle: const TextStyle(fontWeight: FontWeight.w700),
+                      ),
                     ),
                   ),
                 ],

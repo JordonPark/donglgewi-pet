@@ -4,8 +4,25 @@ import Vision
 
 @main
 @objc class AppDelegate: FlutterAppDelegate, FlutterImplicitEngineDelegate {
+  private(set) var layoutChannel: FlutterMethodChannel?
+
   func didInitializeImplicitFlutterEngine(_ engineBridge: FlutterImplicitEngineBridge) {
     GeneratedPluginRegistrant.register(with: engineBridge.pluginRegistry)
+    let layout = FlutterMethodChannel(
+      name: "donglgewi/layout",
+      binaryMessenger: engineBridge.applicationRegistrar.messenger()
+    )
+    layoutChannel = layout
+    layout.setMethodCallHandler { call, result in
+      guard call.method == "toolbarSide" else {
+        result(FlutterMethodNotImplemented)
+        return
+      }
+      let controller = UIApplication.shared.connectedScenes
+        .compactMap { ($0 as? UIWindowScene)?.keyWindow?.rootViewController as? DonglgewiViewController }
+        .first
+      result(controller?.toolbarSide)
+    }
     let channel = FlutterMethodChannel(
       name: "donglgewi/photos",
       binaryMessenger: engineBridge.applicationRegistrar.messenger()

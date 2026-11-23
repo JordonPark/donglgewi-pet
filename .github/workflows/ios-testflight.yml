@@ -19,6 +19,10 @@ on:
         description: Send a patch to staging for manual review when Flutter reports regenerated assets
         type: boolean
         default: false
+      duo_smoke:
+        description: Launch the app on the iPhone Duo simulator when the runner provides one
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -43,6 +47,40 @@ jobs:
           flutter pub get --enforce-lockfile
           flutter analyze --no-pub
           flutter test --no-pub
+      - name: Verify the iOS SDK for iPhone Duo
+        if: inputs.patch_release == ''
+        run: |
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version | awk -F . '
+            { print "iPhoneOS SDK: " $0 }
+            $1 > 27 || ($1 == 27 && $2 >= 1) { compatible = 1 }
+            END { exit !compatible }
+          '
+      - name: Launch on iPhone Duo simulator
+        id: duo
+        if: inputs.duo_smoke && inputs.patch_release == ''
+        run: |
+          device=$(xcrun simctl list devices available --json | jq -r '
+            [.devices[] | .[] | select(.name == "iPhone Duo") | .udid][0] // empty
+          ')
+          if [[ -z "$device" ]]; then
+            echo '::warning::This runner has no iPhone Duo simulator. Flutter layout tests still run.'
+            exit 0
+          fi
+          flutter build ios --simulator --debug --no-pub
+          xcrun simctl bootstatus "$device" -b
+          xcrun simctl install "$device" build/ios/iphonesimulator/Runner.app
+          xcrun simctl launch "$device" com.jordonpark.donglgewi
+          sleep 2
+          xcrun simctl spawn "$device" launchctl list | grep -F com.jordonpark.donglgewi
+          xcrun simctl io "$device" screenshot "$RUNNER_TEMP/donglgewi-duo.png"
+          echo 'screenshot=true' >> "$GITHUB_OUTPUT"
+      - name: Save iPhone Duo screenshot
+        if: steps.duo.outputs.screenshot == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: donglgewi-duo
+          path: ${{ runner.temp }}/donglgewi-duo.png
       - name: Set up Shorebird
         if: inputs.code_push || inputs.patch_release != ''
         uses: shorebirdtech/setup-shorebird@v1
