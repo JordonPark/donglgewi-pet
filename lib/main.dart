@@ -69,15 +69,17 @@ class PetRoom extends StatefulWidget {
   State<PetRoom> createState() => _PetRoomState();
 }
 
-class _PetRoomState extends State<PetRoom> with SingleTickerProviderStateMixin {
+class _PetRoomState extends State<PetRoom> with TickerProviderStateMixin {
   static const _home = Offset(.51, .82);
   static const _park = Offset(.52, .59);
+  static const _cleanDuration = Duration(seconds: 3);
   static const _layoutChannel = MethodChannel('donglgewi/layout');
   final _picker = ImagePicker();
   final _message = TextEditingController();
   final _messageFocus = FocusNode();
   final _composerKey = GlobalKey();
   late final AnimationController _idle;
+  late final AnimationController _sweep;
   late PetGame _game;
   PetVoice? _voice;
   Timer? _timer;
@@ -88,6 +90,7 @@ class _PetRoomState extends State<PetRoom> with SingleTickerProviderStateMixin {
   bool _facingLeft = false;
   bool _ready = false;
   bool _busy = false;
+  bool _cleaning = false;
   bool _greeting = false;
   bool _voiceLoading = false;
   bool _canReplay = false;
@@ -111,6 +114,7 @@ class _PetRoomState extends State<PetRoom> with SingleTickerProviderStateMixin {
       vsync: this,
       duration: const Duration(seconds: 3),
     )..repeat(reverse: true);
+    _sweep = AnimationController(vsync: this, duration: _cleanDuration);
     if (_usesIosLayout) {
       _layoutChannel.setMethodCallHandler((call) async {
         if (call.method == 'roomToolbarVisibleChanged') {
@@ -236,6 +240,7 @@ class _PetRoomState extends State<PetRoom> with SingleTickerProviderStateMixin {
     _timer?.cancel();
     if (_usesIosLayout) _layoutChannel.setMethodCallHandler(null);
     _idle.dispose();
+    _sweep.dispose();
     _message.dispose();
     _messageFocus.dispose();
     final voice = _voice;
@@ -393,14 +398,27 @@ class _PetRoomState extends State<PetRoom> with SingleTickerProviderStateMixin {
     _refresh();
   }
 
-  void _clean() {
-    _refresh();
-    if (_busy || !_game.clean()) return;
+  Future<void> _clean() async {
+    if (_busy || _game.inPark) return;
+    _refresh(greet: false);
+    if (!_game.alive || _game.waste == 0) return;
+    final game = _game;
     setState(() {
       _cancelChatReply();
-      _bubble = '이제 발 디딜 곳이 생겼다!';
+      _busy = true;
+      _cleaning = true;
     });
-    _save();
+    _sweep.forward(from: 0);
+    await Future<void>.delayed(_cleanDuration);
+    if (!mounted) return;
+    _refresh(greet: false);
+    final cleaned = game == _game && game.clean();
+    setState(() {
+      _busy = false;
+      _cleaning = false;
+      if (cleaned) _bubble = '이제 발 디딜 곳이 생겼다!';
+    });
+    if (cleaned) _save();
     _refresh();
   }
 
@@ -658,7 +676,7 @@ class _PetRoomState extends State<PetRoom> with SingleTickerProviderStateMixin {
     if (action == 'apple' || action == 'feed') {
       await _feed(action == 'apple');
     } else if (action == 'clean') {
-      _clean();
+      await _clean();
     }
   }
 
@@ -1535,9 +1553,24 @@ class _PetRoomState extends State<PetRoom> with SingleTickerProviderStateMixin {
                   index++
                 )
                   Positioned(
-                    left: worldX + worldWidth * (.64 + .065 * index),
-                    top: worldY + worldHeight * (.84 - .04 * index),
-                    child: const Text('💩', style: TextStyle(fontSize: 17)),
+                    left: worldX + worldWidth * (.64 + .065 * index) - 15,
+                    top: worldY + worldHeight * (.84 - .04 * index) - 12,
+                    width: 48,
+                    height: 48,
+                    child: Semantics(
+                      label: '배변 치우기',
+                      button: true,
+                      enabled: _game.alive && !_busy,
+                      child: GestureDetector(
+                        behavior: HitTestBehavior.opaque,
+                        onTap: _game.alive && !_busy ? _clean : null,
+                        child: const Center(
+                          child: ExcludeSemantics(
+                            child: Text('💩', style: TextStyle(fontSize: 17)),
+                          ),
+                        ),
+                      ),
+                    ),
                   ),
                 if (disc != null)
                   Positioned(
@@ -1606,6 +1639,15 @@ class _PetRoomState extends State<PetRoom> with SingleTickerProviderStateMixin {
                   ),
                 if (_game.alive && (_sending || _bubble.isNotEmpty))
                   _speechBubble(width, height, petX, petTop, size),
+                if (_cleaning && _game.alive)
+                  Positioned(
+                    left: 8,
+                    right: 8,
+                    bottom: 8,
+                    child: IgnorePointer(
+                      child: Center(child: _cleanProgress()),
+                    ),
+                  ),
                 if (immersive)
                   Positioned(
                     top: 15,
@@ -1647,6 +1689,52 @@ class _PetRoomState extends State<PetRoom> with SingleTickerProviderStateMixin {
           : AspectRatio(aspectRatio: 1.5, child: surface),
     );
   }
+
+  Widget _cleanProgress() => Semantics(
+    liveRegion: true,
+    child: AnimatedBuilder(
+      animation: _sweep,
+      builder: (context, label) => Material(
+        color: paper,
+        elevation: 1,
+        borderRadius: BorderRadius.circular(14),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Transform.rotate(
+                    angle: math.sin(_sweep.value * math.pi * 8) * .28,
+                    child: const Icon(
+                      Icons.cleaning_services_outlined,
+                      color: forest,
+                      size: 16,
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                  label!,
+                ],
+              ),
+              const SizedBox(height: 4),
+              SizedBox(
+                width: 78,
+                child: ExcludeSemantics(
+                  child: LinearProgressIndicator(
+                    value: _sweep.value,
+                    minHeight: 3,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+      child: const Text('청소 중'),
+    ),
+  );
 
   Widget _scenery(bool immersive) {
     final picture = Image.asset(

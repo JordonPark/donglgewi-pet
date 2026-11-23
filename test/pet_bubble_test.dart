@@ -5,6 +5,59 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';
 
 void main() {
+  testWidgets('tapping waste clears the room after three seconds', (
+    tester,
+  ) async {
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(440, 844);
+    addTearDown(tester.view.reset);
+
+    Future<void> tapLabel(String label) async {
+      final target = find.text(label);
+      await tester.ensureVisible(target);
+      await tester.tap(target);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+    }
+
+    await tester.runAsync(() async {
+      await tester.pumpWidget(const PetApp());
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+    });
+    await tester.pump();
+    await tapLabel('설정');
+    await tapLabel('시연 새로 시작 · 첫날 18시');
+    await tapLabel('새로 시작');
+    await tapLabel('돌보기');
+    await tester.tap(find.widgetWithText(FilledButton, '먹이기').last);
+    await tester.pump();
+    for (final time in [500, 250, 300]) {
+      await tester.pump(Duration(milliseconds: time));
+    }
+    await tapLabel('설정');
+    await tapLabel('15시간 뒤 재방문');
+
+    final waste = find.bySemanticsLabel('배변 치우기');
+    final progress = find.text('청소 중');
+    expect(waste, findsOneWidget);
+    await tester.tap(waste);
+    await tester.pump();
+    expect(progress, findsOneWidget);
+    await tester.pump(const Duration(seconds: 2));
+    await tester.tap(waste);
+    tester.view.physicalSize = const Size(756, 822);
+    await tester.pump(const Duration(milliseconds: 900));
+    expect(waste, findsOneWidget);
+    expect(progress, findsOneWidget);
+
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(waste, findsNothing);
+    expect(progress, findsNothing);
+    expect(find.bySemanticsLabel('배변 0/3'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
   testWidgets('Duo delegates compact controls to UIKit and preserves a draft', (
     tester,
   ) async {
@@ -128,7 +181,9 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 400));
     expect(find.text('동글귀의 말'), findsOneWidget);
-    final fullReply = tester.widget<SelectableText>(find.byType(SelectableText));
+    final fullReply = tester.widget<SelectableText>(
+      find.byType(SelectableText),
+    );
     expect(fullReply.data, '응, 나 여기 있어. 네가 오니까 좋아.');
     expect(tester.takeException(), isNull);
 
