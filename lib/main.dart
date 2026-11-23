@@ -472,6 +472,7 @@ class _PetRoomState extends State<PetRoom> with SingleTickerProviderStateMixin {
       showModalBottomSheet<T>(
         context: context,
         isScrollControlled: true,
+        useSafeArea: true,
         showDragHandle: true,
         backgroundColor: paper,
         builder: (context) => SafeArea(
@@ -661,6 +662,7 @@ class _PetRoomState extends State<PetRoom> with SingleTickerProviderStateMixin {
     bool confirmed = false;
     await showModalBottomSheet<void>(
       isScrollControlled: true,
+      useSafeArea: true,
       showDragHandle: true,
       context: context,
       builder: (context) => StatefulBuilder(
@@ -825,11 +827,14 @@ class _PetRoomState extends State<PetRoom> with SingleTickerProviderStateMixin {
     _save();
   }
 
-  Widget _composer() => Material(
+  Widget _composer({bool inRail = false}) => Material(
     key: _composerKey,
     color: paper,
+    borderRadius: inRail
+        ? const BorderRadius.vertical(bottom: Radius.circular(22))
+        : BorderRadius.zero,
     child: Padding(
-      padding: const EdgeInsets.fromLTRB(16, 4, 16, 6),
+      padding: EdgeInsets.fromLTRB(12, 4, 12, inRail ? 12 : 6),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -872,6 +877,7 @@ class _PetRoomState extends State<PetRoom> with SingleTickerProviderStateMixin {
               ),
               const SizedBox(width: 8),
               FilledButton(
+                style: FilledButton.styleFrom(minimumSize: const Size(0, 48)),
                 onPressed: _sending || _busy || !_game.alive
                     ? null
                     : _sendMessage,
@@ -1034,9 +1040,8 @@ class _PetRoomState extends State<PetRoom> with SingleTickerProviderStateMixin {
     return Scaffold(
       body: SafeArea(
         child: LayoutBuilder(
-          builder: (context, space) =>
-              space.maxWidth >= 620 && space.maxHeight >= 340
-              ? _wideRoom(space)
+          builder: (context, space) => space.maxWidth >= 620
+              ? _wideRoom(space, keyboardOpen)
               : _compactRoom(keyboardOpen),
         ),
       ),
@@ -1070,7 +1075,8 @@ class _PetRoomState extends State<PetRoom> with SingleTickerProviderStateMixin {
                         const SizedBox(height: 12),
                         _status(),
                         const SizedBox(height: 12),
-                        _actions(context),
+                        _actions(),
+                        _shortcuts(),
                         ..._messages(),
                       ],
                     ),
@@ -1108,7 +1114,8 @@ class _PetRoomState extends State<PetRoom> with SingleTickerProviderStateMixin {
                       const SizedBox(height: 12),
                       _status(),
                       const SizedBox(height: 12),
-                      _actions(context),
+                      _actions(),
+                      _shortcuts(),
                       ..._messages(),
                     ],
                   ],
@@ -1122,12 +1129,13 @@ class _PetRoomState extends State<PetRoom> with SingleTickerProviderStateMixin {
     ),
   );
 
-  Widget _wideRoom(BoxConstraints space) {
-    final controlWidth = (space.maxWidth * .34).clamp(232.0, 320.0);
+  Widget _wideRoom(BoxConstraints space, bool keyboardOpen) {
+    final controlWidth = (space.maxWidth * .36).clamp(236.0, 324.0);
     return Padding(
-      padding: const EdgeInsets.all(18),
+      padding: EdgeInsets.fromLTRB(16, keyboardOpen ? 8 : 16, 16, 12),
       child: Row(
         key: const ValueKey('wide-room'),
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         textDirection: _toolbarSide == 'left'
             ? TextDirection.rtl
             : TextDirection.ltr,
@@ -1137,28 +1145,58 @@ class _PetRoomState extends State<PetRoom> with SingleTickerProviderStateMixin {
           SizedBox(
             key: const ValueKey('room-controls'),
             width: controlWidth,
-            child: Center(
-              child: DecoratedBox(
-                decoration: BoxDecoration(
-                  color: const Color(0xfff3ede2),
-                  borderRadius: BorderRadius.circular(22),
-                ),
-                child: ListView(
-                  shrinkWrap: true,
-                  keyboardDismissBehavior:
-                      ScrollViewKeyboardDismissBehavior.onDrag,
-                  padding: const EdgeInsets.all(14),
-                  children: [
-                    _identity(),
-                    const SizedBox(height: 12),
-                    _status(),
-                    const SizedBox(height: 12),
-                    if (!_game.alive) Text(_bubble),
-                    if (_chatOpen && _game.alive) _composer(),
-                    _actions(context, stacked: true),
-                    ..._messages(),
-                  ],
-                ),
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                color: const Color(0xfff7f2e9),
+                borderRadius: BorderRadius.circular(22),
+                border: Border.all(color: const Color(0xffe8e0d1)),
+              ),
+              child: Column(
+                children: [
+                  Expanded(
+                    child: LayoutBuilder(
+                      builder: (context, rail) => SingleChildScrollView(
+                        padding: const EdgeInsets.all(14),
+                        child: ConstrainedBox(
+                          constraints: BoxConstraints(
+                            minHeight: math.max(0, rail.maxHeight - 28),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              Column(
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
+                                children: [
+                                  _identity(),
+                                  const SizedBox(height: 16),
+                                  _status(),
+                                  if (!_game.alive) Text(_bubble),
+                                  ..._messages(),
+                                ],
+                              ),
+                              if (!keyboardOpen)
+                                Padding(
+                                  padding: const EdgeInsets.only(top: 18),
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.stretch,
+                                    children: [
+                                      _actions(stacked: true),
+                                      const SizedBox(height: 10),
+                                      const Divider(height: 1),
+                                      _shortcuts(vertical: true),
+                                    ],
+                                  ),
+                                ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                  if (_chatOpen && _game.alive) _composer(inRail: true),
+                ],
               ),
             ),
           ),
@@ -1196,7 +1234,7 @@ class _PetRoomState extends State<PetRoom> with SingleTickerProviderStateMixin {
           style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700),
         ),
       );
-      if (space.maxWidth < 270 ||
+      if (space.maxWidth < 205 ||
           MediaQuery.textScalerOf(context).scale(14) > 19) {
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -1208,50 +1246,80 @@ class _PetRoomState extends State<PetRoom> with SingleTickerProviderStateMixin {
         children: [
           Expanded(child: title),
           const SizedBox(width: 8),
-          Flexible(child: health),
+          health,
         ],
       );
     },
   );
 
-  Widget _status() => Container(
-    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
-    decoration: BoxDecoration(
-      color: const Color(0xffeee9df),
-      borderRadius: BorderRadius.circular(13),
-    ),
-    child: Wrap(
-      spacing: 17,
-      runSpacing: 4,
-      children: [
-        _stat('포만감', '${_game.fullness}/${_game.maxFullness}'),
-        _stat('애정도', '${_game.affection}/${_game.nextAffection}'),
-        _stat('배변', '${_game.waste}/3'),
-      ],
-    ),
-  );
-
-  Widget _stat(String label, String value) => Text.rich(
-    TextSpan(
-      text: '$label ',
-      style: const TextStyle(fontSize: 13),
-      children: [
-        TextSpan(
-          text: value,
-          style: const TextStyle(fontWeight: FontWeight.w800),
+  Widget _status() => LayoutBuilder(
+    builder: (context, space) {
+      final stats = [
+        _stat(
+          '포만감',
+          '${_game.fullness}/${_game.maxFullness}',
+          urgent: _game.fullness == 0,
         ),
-      ],
+        _stat('애정도', '${_game.affection}/${_game.nextAffection}'),
+        _stat('배변', '${_game.waste}/3', urgent: _game.waste >= 3),
+      ];
+      return DecoratedBox(
+        decoration: BoxDecoration(
+          color: const Color(0xffefe9dd),
+          borderRadius: BorderRadius.circular(14),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+          child:
+              space.maxWidth < 186 ||
+                  MediaQuery.textScalerOf(context).scale(13) > 18
+              ? Wrap(spacing: 14, runSpacing: 6, children: stats)
+              : Row(
+                  children: [for (final stat in stats) Expanded(child: stat)],
+                ),
+        ),
+      );
+    },
+  );
+
+  Widget _stat(String label, String value, {bool urgent = false}) => Semantics(
+    label: '$label $value',
+    child: ExcludeSemantics(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(label, style: const TextStyle(fontSize: 11)),
+          Text(
+            value,
+            style: TextStyle(
+              fontSize: 15,
+              fontWeight: FontWeight.w800,
+              color: urgent ? const Color(0xff9c3e22) : ink,
+              fontFeatures: const [FontFeature.tabularFigures()],
+            ),
+          ),
+        ],
+      ),
     ),
   );
 
-  Widget _actions(BuildContext context, {bool stacked = false}) {
+  Widget _actions({bool stacked = false}) {
+    const target = Size(0, 48);
     final care = FilledButton.icon(
       onPressed: _busy || !_game.alive ? null : _care,
+      style: FilledButton.styleFrom(
+        minimumSize: target,
+        padding: const EdgeInsets.symmetric(horizontal: 10),
+      ),
       icon: const Icon(Icons.favorite_border, size: 19),
       label: const Text('돌보기'),
     );
     final talk = FilledButton.tonalIcon(
       onPressed: _busy || !_game.alive || _chatOpen ? null : _openChat,
+      style: FilledButton.styleFrom(
+        minimumSize: target,
+        padding: const EdgeInsets.symmetric(horizontal: 10),
+      ),
       icon: const Icon(Icons.chat_bubble_outline, size: 18),
       label: const Text('말 걸기'),
     );
@@ -1289,7 +1357,9 @@ class _PetRoomState extends State<PetRoom> with SingleTickerProviderStateMixin {
           ),
           const SizedBox(height: 10),
         ],
-        if (vertical) ...[
+        if (_chatOpen)
+          care
+        else if (vertical) ...[
           care,
           const SizedBox(height: 6),
           talk,
@@ -1307,17 +1377,6 @@ class _PetRoomState extends State<PetRoom> with SingleTickerProviderStateMixin {
             icon: const Icon(Icons.replay),
             label: const Text('한 번 더 던지기'),
           ),
-        const SizedBox(height: 2),
-        Wrap(
-          spacing: 4,
-          runSpacing: 0,
-          alignment: stacked ? WrapAlignment.start : WrapAlignment.spaceBetween,
-          children: [
-            _shortcut(Icons.inventory_2_outlined, '가방', () => _bag()),
-            _shortcut(Icons.collections_outlined, '앨범·도감', _album),
-            _shortcut(Icons.settings_outlined, '설정', _settings),
-          ],
-        ),
       ],
     );
   }
@@ -1332,27 +1391,57 @@ class _PetRoomState extends State<PetRoom> with SingleTickerProviderStateMixin {
     if (_game.demoClock) const Text('시연 시계 사용 중', textAlign: TextAlign.center),
   ];
 
-  Widget _shortcut(IconData icon, String label, VoidCallback press) =>
-      TextButton.icon(
-        onPressed: _busy ? null : press,
-        icon: Icon(icon, size: 17),
-        label: Text(label),
-        style: TextButton.styleFrom(
-          padding: const EdgeInsets.symmetric(horizontal: 8),
-        ),
-      );
+  Widget _shortcuts({bool vertical = false}) {
+    final buttons =
+        [
+          (Icons.inventory_2_outlined, '가방', () => _bag()),
+          (Icons.collections_outlined, '앨범·도감', _album),
+          (Icons.settings_outlined, '설정', _settings),
+        ].map(
+          (item) => TextButton(
+            onPressed: _busy ? null : item.$3,
+            style: TextButton.styleFrom(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+              minimumSize: const Size(0, 48),
+            ),
+            child: vertical
+                ? Row(
+                    children: [
+                      Icon(item.$1, size: 18),
+                      const SizedBox(width: 10),
+                      Expanded(child: Text(item.$2)),
+                      const ExcludeSemantics(child: Text('›')),
+                    ],
+                  )
+                : Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(item.$1, size: 17),
+                      const SizedBox(height: 2),
+                      Text(item.$2, textAlign: TextAlign.center),
+                    ],
+                  ),
+          ),
+        );
+    return vertical
+        ? Column(children: buttons.toList())
+        : Row(
+            children: [for (final button in buttons) Expanded(child: button)],
+          );
+  }
 
   Widget _scene({bool immersive = false}) {
     final surface = LayoutBuilder(
       builder: (context, constraints) {
         final width = constraints.maxWidth;
         final height = constraints.maxHeight;
+        final headerHeight = immersive && height >= 210 ? 48.0 : 0.0;
         final worldWidth = immersive
-            ? math.min(width * 1.20, height * 1.5)
+            ? math.min(width, (height - headerHeight) * 1.5)
             : width;
         final worldHeight = immersive ? worldWidth / 1.5 : height;
         final worldX = (width - worldWidth) / 2;
-        final worldY = (height - worldHeight) / 2;
+        final worldY = headerHeight + (height - headerHeight - worldHeight) / 2;
         final size =
             worldWidth *
             (.20 +
@@ -1389,6 +1478,7 @@ class _PetRoomState extends State<PetRoom> with SingleTickerProviderStateMixin {
                     ),
                   ),
                 Positioned(
+                  key: const ValueKey('room-artwork'),
                   left: worldX,
                   top: worldY,
                   width: worldWidth,

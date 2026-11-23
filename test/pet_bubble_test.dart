@@ -14,6 +14,7 @@ void main() {
     debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
     tester.view.devicePixelRatio = 1;
     tester.view.physicalSize = const Size(390, 844);
+    tester.view.padding = const FakeViewPadding(left: 48, top: 18, bottom: 20);
     addTearDown(() {
       tester.view.reset();
       debugDefaultTargetPlatformOverride = null;
@@ -27,7 +28,12 @@ void main() {
     await tester.pump();
     final stage = find.byKey(const ValueKey('pet-stage'));
     final controls = find.byKey(const ValueKey('room-controls'));
+    final artwork = find.byKey(const ValueKey('room-artwork'));
     expect(controls, findsNothing);
+    expect(tester.getTopLeft(stage).dx, greaterThanOrEqualTo(48));
+    final care = find.text('돌보기');
+    final talk = find.text('말 걸기');
+    expect(tester.getCenter(care).dy, tester.getCenter(talk).dy);
     await tester.tap(find.text('말 걸기'));
     await tester.pump();
     final input = find.byType(EditableText);
@@ -39,7 +45,21 @@ void main() {
     expect(controls, findsOneWidget);
     expect(tester.getTopLeft(controls).dx, greaterThanOrEqualTo(52));
     expect(tester.getCenter(controls).dx, lessThan(tester.getCenter(stage).dx));
+    expect(
+      tester.getTopLeft(artwork).dx,
+      greaterThanOrEqualTo(tester.getTopLeft(stage).dx),
+    );
+    expect(
+      tester.getTopRight(artwork).dx,
+      lessThanOrEqualTo(tester.getTopRight(stage).dx),
+    );
     expect(tester.widget<EditableText>(input).controller.text, '우리 뭐 하고 놀까?');
+
+    tester.view.viewInsets = const FakeViewPadding(bottom: 500);
+    await tester.pump();
+    expect(controls, findsOneWidget);
+    expect(tester.getCenter(input).dx, lessThan(tester.getTopLeft(stage).dx));
+    expect(tester.getBottomLeft(input).dy, lessThan(322));
 
     await messenger.handlePlatformMessage(
       layout.name,
@@ -60,6 +80,7 @@ void main() {
     await tester.pump();
     expect(controls, findsNothing);
     expect(tester.widget<EditableText>(input).controller.text, '우리 뭐 하고 놀까?');
+    expect(tester.getBottomLeft(input).dy, lessThan(344));
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox.shrink());
   });
