@@ -1050,38 +1050,70 @@ class _PetRoomState extends State<PetRoom> with SingleTickerProviderStateMixin {
         children: [
           Expanded(
             child: LayoutBuilder(
-              builder: (context, space) => ListView(
-                key: ValueKey(keyboardOpen),
-                padding: EdgeInsets.fromLTRB(16, keyboardOpen ? 4 : 16, 16, 14),
-                children: [
-                  if (!keyboardOpen) ...[
-                    _identity(),
-                    const SizedBox(height: 12),
-                  ],
-                  Center(
-                    child: ConstrainedBox(
-                      constraints: BoxConstraints(
-                        maxWidth: keyboardOpen
-                            ? math.max(120, (space.maxHeight - 12) * 1.5)
-                            : 610,
-                      ),
-                      child: _scene(),
+              builder: (context, space) {
+                final roomy =
+                    !keyboardOpen &&
+                    space.maxHeight >= 560 &&
+                    MediaQuery.textScalerOf(context).scale(14) <= 18 &&
+                    _storageError.isEmpty &&
+                    _download == null;
+                if (roomy) {
+                  return Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 16, 16, 14),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        _identity(),
+                        const SizedBox(height: 12),
+                        Expanded(child: Center(child: _scene())),
+                        if (!_game.alive) Text(_bubble),
+                        const SizedBox(height: 12),
+                        _status(),
+                        const SizedBox(height: 12),
+                        _actions(context),
+                        ..._messages(),
+                      ],
                     ),
+                  );
+                }
+                return ListView(
+                  key: ValueKey(keyboardOpen),
+                  padding: EdgeInsets.fromLTRB(
+                    16,
+                    keyboardOpen ? 4 : 16,
+                    16,
+                    14,
                   ),
-                  if (!_game.alive)
-                    Padding(
-                      padding: const EdgeInsets.only(top: 8),
-                      child: Text(_bubble),
+                  children: [
+                    if (!keyboardOpen) ...[
+                      _identity(),
+                      const SizedBox(height: 12),
+                    ],
+                    Center(
+                      child: ConstrainedBox(
+                        constraints: BoxConstraints(
+                          maxWidth: keyboardOpen
+                              ? math.max(120, (space.maxHeight - 12) * 1.5)
+                              : 610,
+                        ),
+                        child: _scene(),
+                      ),
                     ),
-                  if (!keyboardOpen) ...[
-                    const SizedBox(height: 12),
-                    _status(),
-                    const SizedBox(height: 12),
-                    _actions(context),
-                    ..._messages(),
+                    if (!_game.alive)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 8),
+                        child: Text(_bubble),
+                      ),
+                    if (!keyboardOpen) ...[
+                      const SizedBox(height: 12),
+                      _status(),
+                      const SizedBox(height: 12),
+                      _actions(context),
+                      ..._messages(),
+                    ],
                   ],
-                ],
-              ),
+                );
+              },
             ),
           ),
           if (_chatOpen && _game.alive) _composer(),
@@ -1114,25 +1146,28 @@ class _PetRoomState extends State<PetRoom> with SingleTickerProviderStateMixin {
           SizedBox(
             key: const ValueKey('room-controls'),
             width: controlWidth,
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                color: const Color(0xfff3ede2),
-                borderRadius: BorderRadius.circular(22),
-              ),
-              child: ListView(
-                keyboardDismissBehavior:
-                    ScrollViewKeyboardDismissBehavior.onDrag,
-                padding: const EdgeInsets.all(14),
-                children: [
-                  _identity(),
-                  const SizedBox(height: 12),
-                  _status(),
-                  const SizedBox(height: 12),
-                  if (!_game.alive) Text(_bubble),
-                  if (_chatOpen && _game.alive) _composer(),
-                  _actions(context, stacked: true),
-                  ..._messages(),
-                ],
+            child: Center(
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  color: const Color(0xfff3ede2),
+                  borderRadius: BorderRadius.circular(22),
+                ),
+                child: ListView(
+                  shrinkWrap: true,
+                  keyboardDismissBehavior:
+                      ScrollViewKeyboardDismissBehavior.onDrag,
+                  padding: const EdgeInsets.all(14),
+                  children: [
+                    _identity(),
+                    const SizedBox(height: 12),
+                    _status(),
+                    const SizedBox(height: 12),
+                    if (!_game.alive) Text(_bubble),
+                    if (_chatOpen && _game.alive) _composer(),
+                    _actions(context, stacked: true),
+                    ..._messages(),
+                  ],
+                ),
               ),
             ),
           ),
@@ -1441,7 +1476,6 @@ class _PetRoomState extends State<PetRoom> with SingleTickerProviderStateMixin {
                       style: FilledButton.styleFrom(
                         backgroundColor: paper.withValues(alpha: .94),
                         padding: const EdgeInsets.symmetric(horizontal: 10),
-                        textStyle: const TextStyle(fontWeight: FontWeight.w700),
                       ),
                     ),
                   ),
