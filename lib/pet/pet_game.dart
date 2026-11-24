@@ -14,6 +14,45 @@ int petDayDifference(DateTime later, DateTime earlier) => DateTime.utc(
 
 enum PetActivity { care, play, bond }
 
+enum PetKind {
+  dongle('동글귀', '살구색 둥근 귀와 폭신한 꼬리'),
+  leaf('잎귀', '새싹 귀와 연두색 몸'),
+  star('별꼬리', '남색 몸과 금빛 별 꼬리');
+
+  const PetKind(this.label, this.description);
+
+  final String label;
+  final String description;
+
+  static PetKind fromName(Object? value) =>
+      values.where((kind) => kind.name == value).firstOrNull ?? dongle;
+}
+
+enum PetPlay {
+  disc('원반 던지기', 32),
+  walk('산책하기', 16);
+
+  const PetPlay(this.label, this.cost);
+
+  final String label;
+  final int cost;
+}
+
+typedef PetPlayResult = ({
+  double energyPercent,
+  Map<String, int> gains,
+  bool discBroke,
+});
+
+class PetDisc {
+  const PetDisc(this.maximum, this.remaining);
+
+  final int maximum;
+  final int remaining;
+
+  Map<String, int> toJson() => {'maximum': maximum, 'remaining': remaining};
+}
+
 class PetMemory {
   const PetMemory(this.title, this.at);
   final String title;
@@ -23,10 +62,16 @@ class PetMemory {
 }
 
 class PetGame {
-  PetGame(DateTime now) : at = now, born = now, nextHunger = now.add(hour * 6) {
+  PetGame(DateTime now, {this.kind = PetKind.dongle})
+    : at = now,
+      born = now,
+      nextHunger = now.add(hour * 6) {
     suppliedDay = petDay(now);
+    raisedKinds.add(kind);
   }
 
+  final PetKind kind;
+  final Set<PetKind> raisedKinds = {};
   DateTime at;
   DateTime born;
   DateTime? nextHunger;
@@ -36,6 +81,7 @@ class PetGame {
   DateTime? nextRecovery;
   final List<DateTime> digestion = [];
   final List<PetMemory> memories = [];
+  final List<PetDisc> discs = [];
   final Set<PetActivity> activities = {};
   String suppliedDay = '';
   String affectionDay = '';
@@ -48,17 +94,20 @@ class PetGame {
   int waste = 0;
   int affection = 0;
   int mood = 5;
+  int confidence = 5;
+  int agility = 0;
+  int curiosity = 0;
   int level = 1;
   int energy = 384;
   int apples = 0;
   int pantry = 3;
   int plays = 0;
   int timeOffsetMs = 0;
-  bool disc = false;
   bool inPark = false;
   bool demoClock = false;
 
   bool get alive => death.isEmpty;
+  bool get disc => discs.isNotEmpty;
   bool get healthy => alive && hungerDeadline == null && waste < 3;
   int get maxFullness => level < 3
       ? 3
@@ -66,6 +115,7 @@ class PetGame {
       ? 4
       : 5;
   int get maxEnergy => 320 + 64 * level;
+  double energyPercent(int amount) => amount * 100 / maxEnergy;
   int get nextAffection => level < 3 ? 3 : 8;
   String get stage => level < 3
       ? '아기'
@@ -219,18 +269,76 @@ class PetGame {
 
   void moodChange(int change) => mood = (mood + change).clamp(0, 10);
 
-  void play() {
-    if (!healthy || !disc) return;
-    plays++;
+  bool canPlay(PetPlay activity) =>
+      healthy &&
+      energy >= activity.cost &&
+      switch (activity) {
+        PetPlay.disc => disc,
+        PetPlay.walk => inPark,
+      };
+
+  PetPlayResult? play([PetPlay activity = PetPlay.disc]) {
+    if (!canPlay(activity)) return null;
+    final percent = energyPercent(activity.cost);
+    _useEnergy(activity.cost);
+    final beforeMood = mood;
+    final beforeConfidence = confidence;
+    final beforeAgility = agility;
+    final beforeCuriosity = curiosity;
+    var discBroke = false;
     moodChange(1);
-    mark(PetActivity.play);
+    switch (activity) {
+      case PetPlay.disc:
+        final used = discs.first;
+        discBroke = used.remaining == 1;
+        if (discBroke) {
+          discs.removeAt(0);
+        } else {
+          discs[0] = PetDisc(used.maximum, used.remaining - 1);
+        }
+        plays++;
+        confidence = math.min(10, confidence + 1);
+        agility = math.min(10, agility + 1);
+        mark(PetActivity.play);
+      case PetPlay.walk:
+        curiosity = math.min(10, curiosity + 1);
+        walk();
+    }
+    return (
+      energyPercent: percent,
+      discBroke: discBroke,
+      gains: {
+        if (mood > beforeMood) '기분': mood - beforeMood,
+        if (confidence > beforeConfidence) '자신감': confidence - beforeConfidence,
+        if (agility > beforeAgility) '민첩': agility - beforeAgility,
+        if (curiosity > beforeCuriosity) '호기심': curiosity - beforeCuriosity,
+      },
+    );
   }
 
-  void addFinds(String title, {required bool apple, required bool frisbee}) {
-    if (!alive) return;
+  PetDisc? addFinds(
+    String title, {
+    required bool apple,
+    required bool frisbee,
+    math.Random? random,
+  }) {
+    if (!alive) return null;
     if (apple) apples++;
-    disc = disc || frisbee;
+    PetDisc? found;
+    if (frisbee) {
+      final roll = (random ?? math.Random()).nextInt(100);
+      final durability = switch (roll) {
+        < 10 => 1,
+        < 30 => 2,
+        < 65 => 3,
+        < 90 => 4,
+        _ => 5,
+      };
+      found = PetDisc(durability, durability);
+      discs.add(found);
+    }
     if (title.isNotEmpty) memories.add(PetMemory(title, at));
+    return found;
   }
 
   void walk() {
@@ -245,9 +353,13 @@ class PetGame {
 
   void spend(int tokens) {
     if (!alive || tokens <= 0) return;
-    energy = math.max(0, energy - tokens);
-    nextRecovery = at.add(recoveryInterval);
+    _useEnergy(tokens);
     mark(PetActivity.bond);
+  }
+
+  void _useEnergy(int amount) {
+    energy = math.max(0, energy - amount);
+    nextRecovery = at.add(recoveryInterval);
   }
 
   PetMemory? get nextMemory {
@@ -262,6 +374,8 @@ class PetGame {
   }
 
   String encode() => jsonEncode({
+    'kind': kind.name,
+    'raisedKinds': raisedKinds.map((kind) => kind.name).toList(),
     'at': at.toIso8601String(),
     'born': born.toIso8601String(),
     'nextHunger': nextHunger?.toIso8601String(),
@@ -283,6 +397,9 @@ class PetGame {
     'waste': waste,
     'affection': affection,
     'mood': mood,
+    'confidence': confidence,
+    'agility': agility,
+    'curiosity': curiosity,
     'level': level,
     'energy': energy,
     'apples': apples,
@@ -290,6 +407,7 @@ class PetGame {
     'plays': plays,
     'timeOffsetMs': timeOffsetMs,
     'disc': disc,
+    'discs': discs.map((item) => item.toJson()).toList(),
     'inPark': inPark,
     'demoClock': demoClock,
   });
@@ -299,7 +417,7 @@ class PetGame {
     DateTime? date(String key) => DateTime.tryParse(json[key] as String? ?? '');
     String string(String key) => json[key] as String? ?? '';
     int integer(String key, int fallback) => json[key] as int? ?? fallback;
-    final game = PetGame(date('at')!)
+    final game = PetGame(date('at')!, kind: PetKind.fromName(json['kind']))
       ..born = date('born')!
       ..nextHunger = date('nextHunger')
       ..hungerDeadline = date('hungerDeadline')
@@ -317,15 +435,31 @@ class PetGame {
       ..waste = integer('waste', 0)
       ..affection = integer('affection', 0)
       ..mood = integer('mood', 5)
+      ..confidence = integer('confidence', 5).clamp(0, 10)
+      ..agility = integer('agility', 0).clamp(0, 10)
+      ..curiosity = integer('curiosity', 0).clamp(0, 10)
       ..level = integer('level', 1)
       ..energy = integer('energy', 384)
       ..apples = integer('apples', 0)
       ..pantry = integer('pantry', 3)
       ..plays = integer('plays', 0)
       ..timeOffsetMs = integer('timeOffsetMs', 0)
-      ..disc = json['disc'] == true
       ..inPark = json['inPark'] == true
       ..demoClock = json['demoClock'] == true;
+    if (json['raisedKinds'] case final List kinds) {
+      game.raisedKinds.addAll(
+        PetKind.values.where((kind) => kinds.contains(kind.name)),
+      );
+    }
+    if (json['discs'] case final List items) {
+      for (final item in items.whereType<Map<String, dynamic>>()) {
+        final maximum = (item['maximum'] as int? ?? 3).clamp(1, 5);
+        final remaining = (item['remaining'] as int? ?? 0).clamp(0, maximum);
+        if (remaining > 0) game.discs.add(PetDisc(maximum, remaining));
+      }
+    } else if (json['disc'] == true) {
+      game.discs.add(const PetDisc(3, 3));
+    }
     game.digestion.addAll(
       (json['digestion'] as List).cast<String>().map(DateTime.parse),
     );

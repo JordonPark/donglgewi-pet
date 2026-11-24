@@ -6,7 +6,6 @@ class SceneDelegate: FlutterSceneDelegate {}
 final class DonglgewiViewController: FlutterViewController {
   private(set) var roomToolbarVisible = false
   private lazy var roomItems = [
-    roomItem("care", title: "돌보기", symbol: "heart"),
     roomItem("talk", title: "말 걸기", symbol: "bubble.left"),
     roomItem("bag", title: "가방", symbol: "archivebox"),
     roomItem("album", title: "앨범·도감", symbol: "photo.on.rectangle"),

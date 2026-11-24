@@ -1,11 +1,13 @@
 import 'package:donglgewi/main.dart';
+import 'package:donglgewi/pet/pet_game.dart';
+import 'package:donglgewi/pet/pet_sprite.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';
 
 void main() {
-  testWidgets('park care offers outdoor activities and throws an owned disc', (
+  testWidgets('park buttons launch outdoor activities and show play gains', (
     tester,
   ) async {
     tester.view.devicePixelRatio = 1;
@@ -13,7 +15,9 @@ void main() {
     addTearDown(tester.view.reset);
 
     Future<void> tapLabel(String label) async {
-      await tester.tap(find.text(label));
+      final target = find.text(label);
+      await tester.ensureVisible(target);
+      await tester.tap(target);
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 500));
     }
@@ -25,44 +29,92 @@ void main() {
     await tester.pump();
     await tapLabel('공원 산책');
     await tester.pump(const Duration(milliseconds: 500));
-    await tapLabel('돌보기');
-    expect(find.text('공원 활동'), findsOneWidget);
     expect(find.text('먹이기'), findsNothing);
     expect(find.text('청소하기'), findsNothing);
     expect(
       tester
-          .widget<FilledButton>(find.widgetWithText(FilledButton, '던지기'))
+          .widget<FilledButton>(find.widgetWithText(FilledButton, '원반 던지기'))
           .onPressed,
       isNull,
     );
-    await tapLabel('쉬기');
+    await tapLabel('벤치에서 쉬기');
     expect(find.text('벤치 옆에서 잠깐 쉬자.'), findsOneWidget);
-    await tapLabel('돌보기');
-    await tapLabel('걷기');
+    await tapLabel('산책하기');
     await tester.pump(const Duration(milliseconds: 500));
     await tester.pump(const Duration(milliseconds: 500));
     expect(find.text('벤치까지 한 바퀴 걷자!'), findsOneWidget);
+    expect(find.textContaining('호기심 +1'), findsOneWidget);
 
     await tapLabel('가방');
     await tapLabel('아이템 얻기');
     await tapLabel('시연용 소풍 장면');
     await tapLabel('가방에 담기');
+    expect(find.text('사진에서 원반을 찾았어요'), findsOneWidget);
     tester.state<NavigatorState>(find.byType(Navigator)).pop();
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 500));
-    await tapLabel('돌보기');
-    await tapLabel('던지기');
+    await tapLabel('원반 던지기');
     expect(find.text('내가 받아올게!'), findsOneWidget);
     for (var step = 0; step < 5; step++) {
       await tester.pump(const Duration(milliseconds: 500));
     }
-    expect(find.text('잡았다! 한 번 더 던져볼까?'), findsOneWidget);
+    expect(find.textContaining('잡았다!'), findsOneWidget);
+    expect(find.textContaining('민첩 +1'), findsOneWidget);
+    expect(find.textContaining('자신감 +1'), findsOneWidget);
 
     await tapLabel('집으로');
-    await tapLabel('돌보기');
-    expect(find.text('공원 활동'), findsNothing);
+    expect(find.text('산책하기'), findsNothing);
     expect(find.text('먹이기'), findsWidgets);
     expect(find.text('청소하기'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('the idle pet blinks and reset selects a different character', (
+    tester,
+  ) async {
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(440, 844);
+    addTearDown(tester.view.reset);
+
+    Future<void> tapLabel(String label) async {
+      final target = find.text(label);
+      await tester.ensureVisible(target);
+      await tester.tap(target);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 450));
+    }
+
+    await tester.runAsync(() async {
+      await tester.pumpWidget(const PetApp());
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+    });
+    await tester.pump();
+    final sprite = find.byType(PetSprite);
+    expect(tester.widget<PetSprite>(sprite).blink, isFalse);
+    await tester.pump(const Duration(seconds: 3));
+    expect(tester.widget<PetSprite>(sprite).blink, isTrue);
+    await tester.pump(const Duration(milliseconds: 200));
+    expect(tester.widget<PetSprite>(sprite).blink, isFalse);
+    final margin = tester.widget<Padding>(
+      find.byKey(const ValueKey('room-safe-margin')),
+    );
+    expect(margin.padding, const EdgeInsets.only(bottom: 20));
+
+    await tapLabel('설정');
+    await tapLabel('펫 초기화');
+    await tapLabel('잎귀');
+    await tapLabel('취소');
+    expect(tester.widget<PetSprite>(sprite).kind, PetKind.dongle);
+    await tapLabel('설정');
+    await tapLabel('펫 초기화');
+    await tapLabel('별꼬리');
+    await tapLabel('초기화하고 시작');
+    expect(tester.widget<PetSprite>(sprite).kind, PetKind.star);
+    expect(find.bySemanticsLabel('체력 100.0%'), findsOneWidget);
+    await tapLabel('앨범·도감');
+    expect(find.text('키워봤어요'), findsOneWidget);
+    expect(find.text('지금 키우는 중'), findsOneWidget);
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox.shrink());
   });
@@ -90,9 +142,7 @@ void main() {
     await tapLabel('설정');
     await tapLabel('시연 새로 시작 · 첫날 18시');
     await tapLabel('새로 시작');
-    await tapLabel('돌보기');
-    await tester.tap(find.widgetWithText(FilledButton, '먹이기').last);
-    await tester.pump();
+    await tapLabel('먹이기');
     for (final time in [500, 250, 300]) {
       await tester.pump(Duration(milliseconds: time));
     }
@@ -156,7 +206,7 @@ void main() {
     final stage = find.byKey(const ValueKey('pet-stage'));
     final controls = find.byKey(const ValueKey('room-controls'));
     expect(controls, findsNothing);
-    expect(find.text('돌보기'), findsNothing);
+    expect(find.text('먹이기'), findsOneWidget);
     expect(find.text('말 걸기'), findsNothing);
     expect(tester.getSize(stage).width, greaterThan(310));
     expect(tester.getTopRight(stage).dx, lessThanOrEqualTo(351));
@@ -223,6 +273,15 @@ void main() {
     tester.view.viewInsets = const FakeViewPadding(bottom: 300);
     await tester.pump();
     final input = find.byType(EditableText);
+    await tester.enterText(input, '아직 보내지 않은 말');
+    expect(tester.widget<EditableText>(input).focusNode.hasFocus, isTrue);
+    final stage = find.byKey(const ValueKey('pet-stage'));
+    await tester.tapAt(tester.getTopLeft(stage) + const Offset(24, 18));
+    await tester.pump();
+    expect(tester.widget<EditableText>(input).focusNode.hasFocus, isFalse);
+    expect(tester.widget<EditableText>(input).controller.text, '아직 보내지 않은 말');
+    await tester.tap(input);
+    await tester.pump();
     await tester.enterText(input, '원반으로 놀까?');
     await tester.tap(find.text('보내기'));
     await tester.pump();

@@ -17,6 +17,7 @@ import 'package:material_ui/material_ui.dart';
 
 import 'pet/pet_game.dart';
 import 'pet/pet_platform.dart';
+import 'pet/pet_sprite.dart';
 import 'pet/pet_voice.dart';
 import 'photo_analysis.dart';
 
@@ -80,6 +81,7 @@ class _PetRoomState extends State<PetRoom> with TickerProviderStateMixin {
   final _message = TextEditingController();
   final _messageFocus = FocusNode();
   final _composerKey = GlobalKey();
+  final _blink = ValueNotifier(false);
   late final AnimationController _idle;
   late final AnimationController _sweep;
   late PetGame _game;
@@ -102,6 +104,7 @@ class _PetRoomState extends State<PetRoom> with TickerProviderStateMixin {
   int _chatRequest = 0;
   double? _download;
   String _bubble = '안녕! 우리 방에 온 걸 환영해.';
+  String _playReward = '';
   String _storageError = '';
   bool _systemToolbar = false;
   Map<String, bool>? _sentToolbarActions;
@@ -115,7 +118,10 @@ class _PetRoomState extends State<PetRoom> with TickerProviderStateMixin {
     _idle = AnimationController(
       vsync: this,
       duration: const Duration(seconds: 3),
-    )..repeat(reverse: true);
+    );
+    _idle
+      ..addListener(() => _blink.value = _idle.value > .975)
+      ..repeat(reverse: true);
     _sweep = AnimationController(vsync: this, duration: _cleanDuration);
     if (_usesIosLayout) {
       _layoutChannel.setMethodCallHandler((call) async {
@@ -153,7 +159,6 @@ class _PetRoomState extends State<PetRoom> with TickerProviderStateMixin {
     final available =
         (ModalRoute.isCurrentOf(context) ?? true) && !_busy && !_chatOpen;
     return {
-      'care': available && _game.alive,
       'talk': available && _game.alive,
       'bag': available && _game.alive,
       'album': available,
@@ -165,7 +170,6 @@ class _PetRoomState extends State<PetRoom> with TickerProviderStateMixin {
     if (!mounted || !_ready || action is! String) return;
     if (_toolbarActions()[action] != true) return;
     final VoidCallback? run = switch (action) {
-      'care' => _care,
       'talk' => _openChat,
       'bag' => _bag,
       'album' => _album,
@@ -212,6 +216,8 @@ class _PetRoomState extends State<PetRoom> with TickerProviderStateMixin {
           _game.greetingDay == petDay(_game.at) &&
           _game.greeting.isNotEmpty) {
         _bubble = _game.greeting;
+      } else {
+        _bubble = '안녕! ${_game.kind.label}야.';
       }
     });
     _timer = Timer.periodic(const Duration(seconds: 5), (_) => _refresh());
@@ -242,6 +248,7 @@ class _PetRoomState extends State<PetRoom> with TickerProviderStateMixin {
     _timer?.cancel();
     if (_usesIosLayout) _layoutChannel.setMethodCallHandler(null);
     _idle.dispose();
+    _blink.dispose();
     _sweep.dispose();
     _message.dispose();
     _messageFocus.dispose();
@@ -268,11 +275,12 @@ class _PetRoomState extends State<PetRoom> with TickerProviderStateMixin {
     final oldWaste = _game.waste;
     final oldLevel = _game.level;
     final oldFullness = _game.fullness;
+    final oldEnergy = _game.energy;
     _game.advance(_game.now());
     if (!_game.alive) {
       if (wasAlive) _save();
       _cancelChatReply();
-      setState(() => _bubble = '${_game.death}으로 동글귀를 떠나보냈어요.');
+      setState(() => _bubble = '${_game.death}으로 ${_game.kind.label}와 헤어졌어요.');
       return;
     }
     if (!_game.healthy) {
@@ -293,7 +301,8 @@ class _PetRoomState extends State<PetRoom> with TickerProviderStateMixin {
     }
     if (oldWaste != _game.waste ||
         oldLevel != _game.level ||
-        oldFullness != _game.fullness) {
+        oldFullness != _game.fullness ||
+        oldEnergy != _game.energy) {
       _save();
     }
     setState(() {});
@@ -346,6 +355,7 @@ class _PetRoomState extends State<PetRoom> with TickerProviderStateMixin {
     final voice = _voice;
     if (voice == null || limit < 12) return null;
     final state = jsonEncode({
+      '캐릭터': _game.kind.label,
       '건강': _game.healthLabel,
       '기분': _game.moodLabel,
       '포만감': '${_game.fullness}/${_game.maxFullness}',
@@ -425,15 +435,13 @@ class _PetRoomState extends State<PetRoom> with TickerProviderStateMixin {
   }
 
   Future<void> _throw({bool left = false}) async {
-    _refresh();
-    if (_busy || !_game.healthy || !_game.disc) {
-      _notice(!_game.disc ? '가방에 원반이 필요해요.' : '먼저 동글귀를 돌봐주세요.');
-      return;
-    }
+    _refresh(greet: false);
+    if (_busy || !_game.canPlay(PetPlay.disc)) return;
     setState(() {
       _cancelChatReply();
       _busy = true;
       _canReplay = false;
+      _playReward = '';
       _bubble = '내가 받아올게!';
     });
     final anchor = _game.inPark ? _park : _home;
@@ -465,19 +473,25 @@ class _PetRoomState extends State<PetRoom> with TickerProviderStateMixin {
     }
     if (!mounted) return;
     _game.advance(_game.now());
-    _game.play();
+    final reward = _game.play();
     setState(() {
       _discPosition = null;
       _busy = false;
-      _canReplay = _game.healthy;
-      if (_canReplay) _bubble = '잡았다! 한 번 더 던져볼까?';
+      _canReplay = reward != null && _game.disc;
+      if (reward != null) {
+        _bubble = reward.discBroke ? '잡았다! 이 원반은 이제 다 썼어.' : '잡았다! 한 번 더 던져볼까?';
+        _playReward =
+            '${_rewardLabel(reward)} · ${reward.discBroke ? '원반 소진' : '내구도 −1'}';
+      }
     });
     _save();
     _refresh();
   }
 
   Future<void> _chooseThrow() async {
-    if (_game.level < 4 || _game.inPark || !_game.healthy) return _throw();
+    _refresh(greet: false);
+    if (_busy || !_game.canPlay(PetPlay.disc)) return;
+    if (_game.level < 4 || _game.inPark) return _throw();
     final left = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
@@ -508,7 +522,7 @@ class _PetRoomState extends State<PetRoom> with TickerProviderStateMixin {
     if (_busy || !_game.alive) return;
     final toPark = !_game.inPark;
     if (toPark && !_game.healthy) {
-      _notice('산책 전에 동글귀를 돌봐주세요.');
+      _notice('산책 전에 펫을 돌봐주세요.');
       return;
     }
     setState(() {
@@ -527,13 +541,17 @@ class _PetRoomState extends State<PetRoom> with TickerProviderStateMixin {
     _refresh();
   }
 
-  Future<void> _walkParkPath() async {
+  Future<void> _walkParkPath({bool training = false}) async {
     await _animateTo(const Offset(.39, .65), 370);
     await _animateTo(_park, 440);
     if (!mounted) return;
     _game.advance(_game.now());
-    _game.walk();
-    setState(() => _busy = false);
+    final reward = training ? _game.play(PetPlay.walk) : null;
+    if (!training) _game.walk();
+    setState(() {
+      _busy = false;
+      if (reward != null) _playReward = _rewardLabel(reward);
+    });
     _save();
     _refresh();
   }
@@ -541,14 +559,15 @@ class _PetRoomState extends State<PetRoom> with TickerProviderStateMixin {
   Future<void> _walkInPark() async {
     if (_busy || !_game.inPark) return;
     _refresh(greet: false);
-    if (!_game.healthy) return;
+    if (!_game.canPlay(PetPlay.walk)) return;
     setState(() {
       _cancelChatReply();
       _busy = true;
+      _playReward = '';
       _bubble = '벤치까지 한 바퀴 걷자!';
     });
     await _animateTo(_parkEntrance, 420);
-    if (mounted) await _walkParkPath();
+    if (mounted) await _walkParkPath(training: true);
   }
 
   Future<void> _restInPark() async {
@@ -619,7 +638,7 @@ class _PetRoomState extends State<PetRoom> with TickerProviderStateMixin {
     trailing: FilledButton.tonal(onPressed: onPressed, child: Text(button)),
   );
 
-  Future<void> _bag({bool fresh = false}) async {
+  Future<void> _bag({bool fresh = false, PetDisc? foundDisc}) async {
     if (!_game.alive) return;
     final action = await _sheet<String>('가방', [
       if (fresh && _game.memories.isNotEmpty)
@@ -629,32 +648,34 @@ class _PetRoomState extends State<PetRoom> with TickerProviderStateMixin {
           title: Text(_game.memories.last.title),
           subtitle: const Text('새 추억을 저장했어요.'),
         ),
-      _actionRow(
-        Icons.apple,
-        '사과 ×${_game.apples}',
-        '사진에서 얻은 먹거리',
-        '먹이기',
-        _game.apples > 0 && !_game.inPark
-            ? () => Navigator.pop(context, 'apple')
-            : null,
-      ),
-      _actionRow(
-        Icons.rice_bowl,
-        '기본 먹이 ×${_game.pantry}',
-        '매일 보충되는 먹이',
-        '먹이기',
-        !_game.inPark &&
-                (_game.pantry > 0 || (_game.apples == 0 && _game.fullness == 0))
-            ? () => Navigator.pop(context, 'feed')
-            : null,
-      ),
-      _actionRow(
-        Icons.trip_origin,
-        '원반',
-        _game.disc ? '여러 번 놀 수 있어요.' : '사진에서 찾아보세요.',
-        '던지기',
-        _game.disc ? () => Navigator.pop(context, 'throw') : null,
-      ),
+      if (foundDisc != null)
+        ListTile(
+          contentPadding: EdgeInsets.zero,
+          leading: const Icon(Icons.trip_origin, color: forest),
+          title: const Text('사진에서 원반을 찾았어요'),
+          subtitle: Text('내구도 ${foundDisc.remaining}/${foundDisc.maximum}'),
+        ),
+      for (final (icon, title, detail) in [
+        (Icons.apple, '사과 ×${_game.apples}', '방의 먹이기에서 줄 수 있어요.'),
+        (Icons.rice_bowl, '기본 먹이 ×${_game.pantry}', '매일 보충돼요.'),
+        (
+          Icons.trip_origin,
+          '원반 ×${_game.discs.length}',
+          _game.disc
+              ? '내구도 ${_game.discs.take(4).map((item) => '${item.remaining}/${item.maximum}').join(' · ')}${_game.discs.length > 4 ? ' 외 ${_game.discs.length - 4}개' : ''}'
+              : '사진 속에서 찾아보세요.',
+        ),
+      ])
+        ListTile(
+          contentPadding: EdgeInsets.zero,
+          leading: CircleAvatar(
+            backgroundColor: mint,
+            foregroundColor: forest,
+            child: Icon(icon),
+          ),
+          title: Text(title),
+          subtitle: Text(detail),
+        ),
       const Divider(),
       OutlinedButton.icon(
         onPressed: () => Navigator.pop(context, 'import'),
@@ -662,28 +683,14 @@ class _PetRoomState extends State<PetRoom> with TickerProviderStateMixin {
         label: const Text('아이템 얻기'),
       ),
     ]);
-    if (!mounted) return;
-    switch (action) {
-      case 'apple':
-        await _feed(true);
-      case 'feed':
-        await _feed(false);
-      case 'throw':
-        await _chooseThrow();
-      case 'import':
-        await _import();
-    }
+    if (mounted && action == 'import') await _import();
   }
 
-  Future<void> _care() async {
-    if (_busy || !_game.alive) return;
-    if (_game.inPark) {
-      await _parkActivities();
-      return;
-    }
-    final action = await _sheet<String>('돌보기', [
-      Text('포만감 ${_game.fullness}/${_game.maxFullness} · 배변 ${_game.waste}/3'),
-      const SizedBox(height: 10),
+  Future<void> _feeding() async {
+    if (_busy || !_game.alive || _game.inPark) return;
+    if (_game.apples == 0) return _feed(false);
+    if (_game.pantry == 0) return _feed(true);
+    final action = await _sheet<String>('먹이 고르기', [
       _actionRow(
         Icons.apple,
         '사과 ×${_game.apples}',
@@ -700,58 +707,8 @@ class _PetRoomState extends State<PetRoom> with TickerProviderStateMixin {
             ? () => Navigator.pop(context, 'feed')
             : null,
       ),
-      _actionRow(
-        Icons.cleaning_services_outlined,
-        '청소하기',
-        '배변 ${_game.waste}개',
-        '치우기',
-        _game.waste > 0 ? () => Navigator.pop(context, 'clean') : null,
-      ),
     ]);
-    if (!mounted) return;
-    if (action == 'apple' || action == 'feed') {
-      await _feed(action == 'apple');
-    } else if (action == 'clean') {
-      await _clean();
-    }
-  }
-
-  Future<void> _parkActivities() async {
-    _refresh(greet: false);
-    if (!_game.alive) return;
-    final active = _game.healthy;
-    final action = await _sheet<String>('공원 활동', [
-      _actionRow(
-        Icons.trip_origin,
-        '원반 던지기',
-        _game.disc ? '잔디밭에서 원반을 주고받아요.' : '가방에 원반이 필요해요.',
-        '던지기',
-        active && _game.disc ? () => Navigator.pop(context, 'throw') : null,
-      ),
-      _actionRow(
-        Icons.park_outlined,
-        '산책하기',
-        '입구에서 벤치까지 같이 걸어요.',
-        '걷기',
-        active ? () => Navigator.pop(context, 'walk') : null,
-      ),
-      _actionRow(
-        Icons.favorite_border,
-        '벤치에서 쉬기',
-        '벤치 옆에 잠깐 머물러요.',
-        '쉬기',
-        () => Navigator.pop(context, 'rest'),
-      ),
-    ]);
-    if (!mounted || !_game.inPark) return;
-    switch (action) {
-      case 'throw':
-        await _chooseThrow();
-      case 'walk':
-        await _walkInPark();
-      case 'rest':
-        await _restInPark();
-    }
+    if (mounted && action != null) await _feed(action == 'apple');
   }
 
   Future<void> _import() async {
@@ -892,10 +849,10 @@ class _PetRoomState extends State<PetRoom> with TickerProviderStateMixin {
       _notice('담을 아이템이나 추억을 선택해주세요.');
       return;
     }
-    _game.addFinds(title, apple: apple, frisbee: disc);
+    final foundDisc = _game.addFinds(title, apple: apple, frisbee: disc);
     setState(() => _bubble = '가방에 담았어. 같이 써보자!');
     _save();
-    await _bag(fresh: title.isNotEmpty);
+    await _bag(fresh: title.isNotEmpty, foundDisc: foundDisc);
   }
 
   void _openChat() {
@@ -968,59 +925,62 @@ class _PetRoomState extends State<PetRoom> with TickerProviderStateMixin {
     key: _composerKey,
     color: paper,
     borderRadius: inRail ? BorderRadius.circular(20) : BorderRadius.zero,
-    child: Padding(
-      padding: EdgeInsets.fromLTRB(12, 4, 12, inRail ? 12 : 6),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Row(
-            children: [
-              Expanded(child: Text('대화 체력 $_energyLabel')),
-              if (_voice != null)
-                Semantics(
-                  toggled: _longReply,
-                  child: TextButton(
-                    onPressed: _sending
-                        ? null
-                        : () => setState(() => _longReply = !_longReply),
-                    child: Text(_longReply ? '긴 답장 켜짐' : '긴 답장'),
+    child: TextFieldTapRegion(
+      child: Padding(
+        padding: EdgeInsets.fromLTRB(12, 4, 12, inRail ? 12 : 6),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Row(
+              children: [
+                Expanded(child: Text('체력 $_energyLabel')),
+                if (_voice != null)
+                  Semantics(
+                    toggled: _longReply,
+                    child: TextButton(
+                      onPressed: _sending
+                          ? null
+                          : () => setState(() => _longReply = !_longReply),
+                      child: Text(_longReply ? '긴 답장 켜짐' : '긴 답장'),
+                    ),
+                  ),
+                IconButton(
+                  tooltip: '대화 닫기',
+                  onPressed: _closeChat,
+                  icon: const Text('×', style: TextStyle(fontSize: 24)),
+                ),
+              ],
+            ),
+            Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _message,
+                    focusNode: _messageFocus,
+                    readOnly: _sending,
+                    maxLength: 160,
+                    textInputAction: TextInputAction.send,
+                    onTapOutside: (_) => _messageFocus.unfocus(),
+                    onSubmitted: (_) => unawaited(_sendMessage()),
+                    decoration: const InputDecoration(
+                      hintText: '무슨 말을 걸까요?',
+                      counterText: '',
+                      isDense: true,
+                    ),
                   ),
                 ),
-              IconButton(
-                tooltip: '대화 닫기',
-                onPressed: _closeChat,
-                icon: const Text('×', style: TextStyle(fontSize: 24)),
-              ),
-            ],
-          ),
-          Row(
-            children: [
-              Expanded(
-                child: TextField(
-                  controller: _message,
-                  focusNode: _messageFocus,
-                  readOnly: _sending,
-                  maxLength: 160,
-                  textInputAction: TextInputAction.send,
-                  onSubmitted: (_) => unawaited(_sendMessage()),
-                  decoration: const InputDecoration(
-                    hintText: '무슨 말을 걸까요?',
-                    counterText: '',
-                    isDense: true,
-                  ),
+                const SizedBox(width: 8),
+                FilledButton(
+                  style: FilledButton.styleFrom(minimumSize: const Size(0, 48)),
+                  onPressed: _sending || _busy || !_game.alive
+                      ? null
+                      : _sendMessage,
+                  child: const Text('보내기'),
                 ),
-              ),
-              const SizedBox(width: 8),
-              FilledButton(
-                style: FilledButton.styleFrom(minimumSize: const Size(0, 48)),
-                onPressed: _sending || _busy || !_game.alive
-                    ? null
-                    : _sendMessage,
-                child: const Text('보내기'),
-              ),
-            ],
-          ),
-        ],
+              ],
+            ),
+          ],
+        ),
       ),
     ),
   );
@@ -1048,12 +1008,33 @@ class _PetRoomState extends State<PetRoom> with TickerProviderStateMixin {
         subtitle: Text('${memory.at.month}월 ${memory.at.day}일'),
       ),
     const Divider(),
-    const ListTile(
-      contentPadding: EdgeInsets.zero,
-      leading: Icon(Icons.pets),
-      title: Text('동글귀'),
-      subtitle: Text('기본 캐릭터'),
-    ),
+    for (final kind in PetKind.values)
+      ListTile(
+        contentPadding: EdgeInsets.zero,
+        leading: SizedBox(width: 44, height: 38, child: PetSprite(kind: kind)),
+        title: Text(kind.label),
+        subtitle: Text(
+          _game.kind == kind
+              ? '지금 키우는 중'
+              : _game.raisedKinds.contains(kind)
+              ? '키워봤어요'
+              : '새 펫으로 선택할 수 있어요',
+        ),
+      ),
+  ]);
+
+  Future<void> _petInfo() => _sheet<void>('${_game.kind.label}의 능력치', [
+    for (final (label, value) in [
+      ('기분', _game.mood),
+      ('자신감', _game.confidence),
+      ('민첩', _game.agility),
+      ('호기심', _game.curiosity),
+    ])
+      ListTile(
+        contentPadding: EdgeInsets.zero,
+        title: Text(label),
+        trailing: Text('$value/10'),
+      ),
   ]);
 
   Future<void> _settings() async {
@@ -1073,6 +1054,10 @@ class _PetRoomState extends State<PetRoom> with TickerProviderStateMixin {
           onPressed: () => Navigator.pop(context, 'download'),
           child: const Text('Kanana 모델 받기 · 약 1.52 GB'),
         ),
+      OutlinedButton(
+        onPressed: () => Navigator.pop(context, 'newPet'),
+        child: const Text('펫 초기화'),
+      ),
       const Divider(),
       const Text('시연 시계', style: TextStyle(fontWeight: FontWeight.bold)),
       const Text(
@@ -1099,6 +1084,10 @@ class _PetRoomState extends State<PetRoom> with TickerProviderStateMixin {
       unawaited(_downloadModel());
       return;
     }
+    if (choice == 'newPet') {
+      await _chooseNewPet();
+      return;
+    }
     if (choice == 'reset') {
       final approved = await showDialog<bool>(
         context: context,
@@ -1120,19 +1109,13 @@ class _PetRoomState extends State<PetRoom> with TickerProviderStateMixin {
       if (approved != true || !mounted) return;
       final now = DateTime.now();
       final demo = DateTime(now.year, now.month, now.day, 18);
-      setState(() {
-        _cancelChatReply();
-        _message.clear();
-        _messageFocus.unfocus();
-        _chatOpen = false;
-        _game = PetGame(demo)
+      _replacePet(
+        PetGame(demo, kind: _game.kind)
           ..timeOffsetMs = demo.difference(now).inMilliseconds
-          ..demoClock = true;
-        _position = _home;
-        _discPosition = null;
-        _canReplay = false;
-        _bubble = '안녕! 가방에서 소풍 장면을 골라보자.';
-      });
+          ..demoClock = true,
+        '안녕! 가방에서 소풍 장면을 골라보자.',
+      );
+      return;
     } else {
       final target = _game.born.add(hour * int.parse(choice));
       if (!target.isAfter(_game.at)) {
@@ -1143,6 +1126,61 @@ class _PetRoomState extends State<PetRoom> with TickerProviderStateMixin {
       _canReplay = false;
       _refresh();
     }
+    _save();
+  }
+
+  Future<void> _chooseNewPet() async {
+    final kind = await _sheet<PetKind>('새 펫 고르기', [
+      for (final candidate in PetKind.values)
+        ListTile(
+          contentPadding: EdgeInsets.zero,
+          leading: SizedBox(
+            width: 50,
+            height: 38,
+            child: PetSprite(kind: candidate),
+          ),
+          title: Text(candidate.label),
+          subtitle: Text(candidate.description),
+          onTap: () => Navigator.pop(context, candidate),
+        ),
+    ]);
+    if (!mounted || kind == null) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('${kind.label}로 다시 시작할까요?'),
+        content: const Text('현재 펫의 성장, 가방, 추억을 초기화합니다. 키워본 캐릭터는 도감에 남아요.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('취소'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('초기화하고 시작'),
+          ),
+        ],
+      ),
+    );
+    if (!mounted || confirmed != true) return;
+    _replacePet(PetGame(DateTime.now(), kind: kind), '안녕! ${kind.label}야.');
+  }
+
+  void _replacePet(PetGame next, String greeting) {
+    next.raisedKinds.addAll(_game.raisedKinds);
+    setState(() {
+      _cancelChatReply();
+      _message.clear();
+      _messageFocus.unfocus();
+      _chatOpen = false;
+      _game = next;
+      _position = _home;
+      _discPosition = null;
+      _canReplay = false;
+      _facingLeft = false;
+      _playReward = '';
+      _bubble = greeting;
+    });
     _save();
   }
 
@@ -1163,7 +1201,7 @@ class _PetRoomState extends State<PetRoom> with TickerProviderStateMixin {
   }
 
   String get _energyLabel =>
-      '${(_game.energy * 100 / _game.maxEnergy).toStringAsFixed(1)}%';
+      '${_game.energyPercent(_game.energy).toStringAsFixed(1)}%';
 
   @override
   Widget build(BuildContext context) {
@@ -1175,11 +1213,15 @@ class _PetRoomState extends State<PetRoom> with TickerProviderStateMixin {
         _chatOpen && MediaQuery.viewInsetsOf(context).bottom > 0;
     return Scaffold(
       body: SafeArea(
-        child: LayoutBuilder(
-          builder: (context, space) {
-            if (space.maxWidth >= 620) return _wideRoom(space, keyboardOpen);
-            return _compactRoom(keyboardOpen);
-          },
+        child: Padding(
+          key: const ValueKey('room-safe-margin'),
+          padding: EdgeInsets.only(bottom: keyboardOpen ? 0 : 20),
+          child: LayoutBuilder(
+            builder: (context, space) {
+              if (space.maxWidth >= 620) return _wideRoom(space, keyboardOpen);
+              return _compactRoom(keyboardOpen);
+            },
+          ),
         ),
       ),
     );
@@ -1210,7 +1252,7 @@ class _PetRoomState extends State<PetRoom> with TickerProviderStateMixin {
         const SizedBox(height: 12),
         _status(),
         const SizedBox(height: 12),
-        _actions(showPrimary: !_systemToolbar),
+        _actions(showTalk: !_systemToolbar),
         if (!_systemToolbar) _shortcuts(),
         ..._messages(),
       ];
@@ -1300,7 +1342,7 @@ class _PetRoomState extends State<PetRoom> with TickerProviderStateMixin {
                             if (!keyboardOpen)
                               Padding(
                                 padding: const EdgeInsets.only(top: 12),
-                                child: _controlCard(_actions(stacked: true)),
+                                child: _controlCard(_actions()),
                               ),
                           ],
                         ),
@@ -1332,11 +1374,27 @@ class _PetRoomState extends State<PetRoom> with TickerProviderStateMixin {
       final title = Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            '동글귀',
-            style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-              fontWeight: FontWeight.w800,
-              letterSpacing: -.9,
+          Tooltip(
+            message: '펫 정보',
+            child: InkWell(
+              onTap: _busy ? null : _petInfo,
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Flexible(
+                    child: Text(
+                      _game.kind.label,
+                      style: Theme.of(context).textTheme.headlineSmall
+                          ?.copyWith(
+                            fontWeight: FontWeight.w800,
+                            letterSpacing: -.9,
+                          ),
+                    ),
+                  ),
+                  const SizedBox(width: 4),
+                  const Icon(Icons.chevron_right, size: 17),
+                ],
+              ),
             ),
           ),
           Text(
@@ -1430,86 +1488,127 @@ class _PetRoomState extends State<PetRoom> with TickerProviderStateMixin {
     ),
   );
 
-  VoidCallback? get _careAction => _busy || !_game.alive ? null : _care;
+  String _rewardLabel(PetPlayResult reward) => [
+    '체력 −${reward.energyPercent.toStringAsFixed(1)}%',
+    for (final gain in reward.gains.entries) '${gain.key} +${gain.value}',
+  ].join(' · ');
 
-  VoidCallback? get _talkAction =>
-      _busy || !_game.alive || _chatOpen ? null : _openChat;
+  String _playHint(PetPlay activity) {
+    if (activity == PetPlay.disc && !_game.disc) return '가방에 원반이 필요해요.';
+    if (!_game.healthy) return '먹이기나 청소가 필요해요.';
+    final cost = _game.energyPercent(activity.cost).toStringAsFixed(1);
+    return _game.energy < activity.cost ? '체력이 $cost% 필요해요.' : '체력 −$cost%';
+  }
 
-  Widget _actions({bool stacked = false, bool showPrimary = true}) {
-    const target = Size(0, 48);
-    final care = FilledButton.icon(
-      onPressed: _careAction,
-      style: FilledButton.styleFrom(
-        minimumSize: target,
-        padding: const EdgeInsets.symmetric(horizontal: 10),
+  Widget _actions({bool showTalk = true}) {
+    if (_chatOpen) return const SizedBox.shrink();
+    final ready = _game.alive && !_busy;
+    final buttons = <(IconData, String, VoidCallback?, String?)>[
+      if (!_game.inPark) ...[
+        (
+          Icons.rice_bowl,
+          '먹이기',
+          ready && _game.fullness < _game.maxFullness ? _feeding : null,
+          null,
+        ),
+        (
+          Icons.cleaning_services_outlined,
+          '청소하기',
+          ready && _game.waste > 0 ? _clean : null,
+          null,
+        ),
+      ],
+      (
+        Icons.trip_origin,
+        _canReplay ? '한 번 더 던지기' : '원반 던지기',
+        ready && _game.canPlay(PetPlay.disc) ? _chooseThrow : null,
+        _playHint(PetPlay.disc),
       ),
-      icon: const Icon(Icons.favorite_border, size: 19),
-      label: const Text('돌보기'),
-    );
-    final talk = FilledButton.tonalIcon(
-      onPressed: _talkAction,
-      style: FilledButton.styleFrom(
-        minimumSize: target,
-        padding: const EdgeInsets.symmetric(horizontal: 10),
-      ),
-      icon: const Icon(Icons.chat_bubble_outline, size: 18),
-      label: const Text('말 걸기'),
-    );
-    final vertical = stacked || MediaQuery.textScalerOf(context).scale(14) > 20;
+      if (_game.inPark) ...[
+        (
+          Icons.park_outlined,
+          '산책하기',
+          ready && _game.canPlay(PetPlay.walk) ? _walkInPark : null,
+          _playHint(PetPlay.walk),
+        ),
+        (Icons.favorite_border, '벤치에서 쉬기', ready ? _restInPark : null, null),
+      ],
+      if (showTalk)
+        (Icons.chat_bubble_outline, '말 걸기', ready ? _openChat : null, null),
+    ];
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        if (!_chatOpen) ...[
-          Semantics(
-            label: '대화 체력 $_energyLabel',
-            child: ExcludeSemantics(
-              child: Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      '대화 체력',
-                      style: Theme.of(context).textTheme.labelMedium,
-                    ),
+        Semantics(
+          label: '체력 $_energyLabel',
+          child: ExcludeSemantics(
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    '체력',
+                    style: Theme.of(context).textTheme.labelMedium,
                   ),
-                  Text(
-                    _energyLabel,
-                    style: const TextStyle(fontWeight: FontWeight.w700),
-                  ),
-                ],
+                ),
+                Text(
+                  _energyLabel,
+                  style: const TextStyle(fontWeight: FontWeight.w700),
+                ),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(height: 4),
+        ClipRRect(
+          borderRadius: BorderRadius.circular(5),
+          child: LinearProgressIndicator(
+            value: _game.energy / _game.maxEnergy,
+            minHeight: 4,
+          ),
+        ),
+        if (_playReward.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.only(top: 5),
+            child: Semantics(
+              liveRegion: true,
+              child: Text(
+                _playReward,
+                style: Theme.of(context).textTheme.bodySmall,
               ),
             ),
           ),
-          const SizedBox(height: 4),
-          ClipRRect(
-            borderRadius: BorderRadius.circular(5),
-            child: LinearProgressIndicator(
-              value: _game.energy / _game.maxEnergy,
-              minHeight: 4,
-            ),
-          ),
-          if (showPrimary) const SizedBox(height: 10),
-        ],
-        if (showPrimary)
-          if (_chatOpen)
-            care
-          else if (vertical) ...[
-            care,
-            const SizedBox(height: 6),
-            talk,
-          ] else
-            Row(
+        const SizedBox(height: 10),
+        LayoutBuilder(
+          builder: (context, space) {
+            final pair =
+                space.maxWidth >= 270 &&
+                MediaQuery.textScalerOf(context).scale(14) <= 19;
+            final width = pair ? (space.maxWidth - 8) / 2 : space.maxWidth;
+            return Wrap(
+              spacing: 8,
+              runSpacing: 4,
               children: [
-                Expanded(child: care),
-                const SizedBox(width: 8),
-                Expanded(child: talk),
+                for (final (icon, label, press, hint) in buttons)
+                  SizedBox(
+                    width: width,
+                    child: Tooltip(
+                      message: hint ?? label,
+                      excludeFromSemantics: hint == null,
+                      child: FilledButton.tonalIcon(
+                        onPressed: press,
+                        icon: Icon(icon, size: 17),
+                        label: Text(label, textAlign: TextAlign.center),
+                        style: FilledButton.styleFrom(
+                          minimumSize: const Size(0, 48),
+                          padding: const EdgeInsets.symmetric(horizontal: 8),
+                        ),
+                      ),
+                    ),
+                  ),
               ],
-            ),
-        if (_canReplay && !_busy)
-          OutlinedButton.icon(
-            onPressed: _chooseThrow,
-            icon: const Icon(Icons.replay),
-            label: const Text('한 번 더 던지기'),
-          ),
+            );
+          },
+        ),
       ],
     );
   }
@@ -1674,7 +1773,7 @@ class _PetRoomState extends State<PetRoom> with TickerProviderStateMixin {
                     height: size * .7,
                     child: Semantics(
                       button: true,
-                      label: '동글귀 톡 누르기',
+                      label: '${_game.kind.label} 톡 누르기',
                       child: GestureDetector(
                         onTap: _tapPet,
                         child: Stack(
@@ -1700,10 +1799,12 @@ class _PetRoomState extends State<PetRoom> with TickerProviderStateMixin {
                                   child: child,
                                 ),
                               ),
-                              child: Image.asset(
-                                'assets/pet/dongle.png',
-                                fit: BoxFit.contain,
-                                filterQuality: FilterQuality.low,
+                              child: ValueListenableBuilder<bool>(
+                                valueListenable: _blink,
+                                builder: (context, blinking, _) => PetSprite(
+                                  kind: _game.kind,
+                                  blink: !_busy && blinking,
+                                ),
                               ),
                             ),
                           ],
@@ -1880,8 +1981,9 @@ class _PetRoomState extends State<PetRoom> with TickerProviderStateMixin {
                   : Tooltip(
                       message: '대사 전체 보기',
                       child: InkWell(
-                        onTap: () =>
-                            _sheet<void>('동글귀의 말', [SelectableText(_bubble)]),
+                        onTap: () => _sheet<void>('${_game.kind.label}의 말', [
+                          SelectableText(_bubble),
+                        ]),
                         child: preview,
                       ),
                     ),
