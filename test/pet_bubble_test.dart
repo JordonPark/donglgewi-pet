@@ -5,6 +5,68 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';
 
 void main() {
+  testWidgets('park care offers outdoor activities and throws an owned disc', (
+    tester,
+  ) async {
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(440, 844);
+    addTearDown(tester.view.reset);
+
+    Future<void> tapLabel(String label) async {
+      await tester.tap(find.text(label));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 500));
+    }
+
+    await tester.runAsync(() async {
+      await tester.pumpWidget(const PetApp());
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+    });
+    await tester.pump();
+    await tapLabel('공원 산책');
+    await tester.pump(const Duration(milliseconds: 500));
+    await tapLabel('돌보기');
+    expect(find.text('공원 활동'), findsOneWidget);
+    expect(find.text('먹이기'), findsNothing);
+    expect(find.text('청소하기'), findsNothing);
+    expect(
+      tester
+          .widget<FilledButton>(find.widgetWithText(FilledButton, '던지기'))
+          .onPressed,
+      isNull,
+    );
+    await tapLabel('쉬기');
+    expect(find.text('벤치 옆에서 잠깐 쉬자.'), findsOneWidget);
+    await tapLabel('돌보기');
+    await tapLabel('걷기');
+    await tester.pump(const Duration(milliseconds: 500));
+    await tester.pump(const Duration(milliseconds: 500));
+    expect(find.text('벤치까지 한 바퀴 걷자!'), findsOneWidget);
+
+    await tapLabel('가방');
+    await tapLabel('아이템 얻기');
+    await tapLabel('시연용 소풍 장면');
+    await tapLabel('가방에 담기');
+    tester.state<NavigatorState>(find.byType(Navigator)).pop();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 500));
+    await tapLabel('돌보기');
+    await tapLabel('던지기');
+    expect(find.text('내가 받아올게!'), findsOneWidget);
+    for (var step = 0; step < 5; step++) {
+      await tester.pump(const Duration(milliseconds: 500));
+    }
+    expect(find.text('잡았다! 한 번 더 던져볼까?'), findsOneWidget);
+
+    await tapLabel('집으로');
+    await tapLabel('돌보기');
+    expect(find.text('공원 활동'), findsNothing);
+    expect(find.text('먹이기'), findsWidgets);
+    expect(find.text('청소하기'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
   testWidgets('tapping waste clears the room after three seconds', (
     tester,
   ) async {

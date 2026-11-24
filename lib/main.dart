@@ -72,6 +72,8 @@ class PetRoom extends StatefulWidget {
 class _PetRoomState extends State<PetRoom> with TickerProviderStateMixin {
   static const _home = Offset(.51, .82);
   static const _park = Offset(.52, .59);
+  static const _parkEntrance = Offset(.23, .72);
+  static const _parkBench = Offset(.57, .66);
   static const _cleanDuration = Duration(seconds: 3);
   static const _layoutChannel = MethodChannel('donglgewi/layout');
   final _picker = ImagePicker();
@@ -513,18 +515,52 @@ class _PetRoomState extends State<PetRoom> with TickerProviderStateMixin {
       _cancelChatReply();
       _game.inPark = toPark;
       _canReplay = false;
-      _position = toPark ? const Offset(.23, .72) : _home;
+      _position = toPark ? _parkEntrance : _home;
       _bubble = toPark ? '오늘은 벤치까지 걸어가 볼까?' : '우리 집에 돌아왔어.';
       _busy = toPark;
     });
     if (toPark) {
-      await _animateTo(const Offset(.39, .65), 370);
-      await _animateTo(_park, 440);
-      if (!mounted) return;
-      _game.walk();
-      setState(() => _busy = false);
+      await _walkParkPath();
+      return;
     }
     _save();
+    _refresh();
+  }
+
+  Future<void> _walkParkPath() async {
+    await _animateTo(const Offset(.39, .65), 370);
+    await _animateTo(_park, 440);
+    if (!mounted) return;
+    _game.advance(_game.now());
+    _game.walk();
+    setState(() => _busy = false);
+    _save();
+    _refresh();
+  }
+
+  Future<void> _walkInPark() async {
+    if (_busy || !_game.inPark) return;
+    _refresh(greet: false);
+    if (!_game.healthy) return;
+    setState(() {
+      _cancelChatReply();
+      _busy = true;
+      _bubble = '벤치까지 한 바퀴 걷자!';
+    });
+    await _animateTo(_parkEntrance, 420);
+    if (mounted) await _walkParkPath();
+  }
+
+  Future<void> _restInPark() async {
+    if (_busy || !_game.inPark || !_game.alive) return;
+    setState(() {
+      _cancelChatReply();
+      _busy = true;
+      if (_game.healthy) _bubble = '벤치 옆에서 잠깐 쉬자.';
+    });
+    await _animateTo(_parkBench, 430);
+    if (!mounted) return;
+    setState(() => _busy = false);
     _refresh();
   }
 
@@ -640,11 +676,11 @@ class _PetRoomState extends State<PetRoom> with TickerProviderStateMixin {
   }
 
   Future<void> _care() async {
+    if (_busy || !_game.alive) return;
     if (_game.inPark) {
-      _notice('먹이기와 청소는 집에서 할 수 있어요.');
+      await _parkActivities();
       return;
     }
-    if (!_game.alive) return;
     final action = await _sheet<String>('돌보기', [
       Text('포만감 ${_game.fullness}/${_game.maxFullness} · 배변 ${_game.waste}/3'),
       const SizedBox(height: 10),
@@ -677,6 +713,44 @@ class _PetRoomState extends State<PetRoom> with TickerProviderStateMixin {
       await _feed(action == 'apple');
     } else if (action == 'clean') {
       await _clean();
+    }
+  }
+
+  Future<void> _parkActivities() async {
+    _refresh(greet: false);
+    if (!_game.alive) return;
+    final active = _game.healthy;
+    final action = await _sheet<String>('공원 활동', [
+      _actionRow(
+        Icons.trip_origin,
+        '원반 던지기',
+        _game.disc ? '잔디밭에서 원반을 주고받아요.' : '가방에 원반이 필요해요.',
+        '던지기',
+        active && _game.disc ? () => Navigator.pop(context, 'throw') : null,
+      ),
+      _actionRow(
+        Icons.park_outlined,
+        '산책하기',
+        '입구에서 벤치까지 같이 걸어요.',
+        '걷기',
+        active ? () => Navigator.pop(context, 'walk') : null,
+      ),
+      _actionRow(
+        Icons.favorite_border,
+        '벤치에서 쉬기',
+        '벤치 옆에 잠깐 머물러요.',
+        '쉬기',
+        () => Navigator.pop(context, 'rest'),
+      ),
+    ]);
+    if (!mounted || !_game.inPark) return;
+    switch (action) {
+      case 'throw':
+        await _chooseThrow();
+      case 'walk':
+        await _walkInPark();
+      case 'rest':
+        await _restInPark();
     }
   }
 
