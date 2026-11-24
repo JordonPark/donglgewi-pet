@@ -70,14 +70,17 @@ class PetRoom extends StatefulWidget {
   State<PetRoom> createState() => _PetRoomState();
 }
 
-class _PetRoomState extends State<PetRoom> with TickerProviderStateMixin {
+class _PetRoomState extends State<PetRoom>
+    with TickerProviderStateMixin, WidgetsBindingObserver {
   static const _home = Offset(.51, .82);
   static const _park = Offset(.52, .59);
   static const _parkEntrance = Offset(.23, .72);
   static const _parkBench = Offset(.57, .66);
+  static const _parkDiscLanding = Offset(.81, .64);
   static const _cleanDuration = Duration(seconds: 3);
   static const _layoutChannel = MethodChannel('donglgewi/layout');
   final _picker = ImagePicker();
+  final _photoAnalysis = PhotoAnalysis();
   final _message = TextEditingController();
   final _messageFocus = FocusNode();
   final _composerKey = GlobalKey();
@@ -85,9 +88,11 @@ class _PetRoomState extends State<PetRoom> with TickerProviderStateMixin {
   late final AnimationController _idle;
   late final AnimationController _sweep;
   late final AnimationController _patEffect;
+  late final AnimationController _chatMotion;
   late PetGame _game;
   PetVoice? _voice;
   Timer? _timer;
+  Timer? _keyboardDismissal;
   Future<void> _writes = Future.value();
   Offset _position = _home;
   Offset? _discPosition;
@@ -100,6 +105,7 @@ class _PetRoomState extends State<PetRoom> with TickerProviderStateMixin {
   bool _voiceLoading = false;
   bool _canReplay = false;
   bool _chatOpen = false;
+  bool _hadChatKeyboard = false;
   bool _sending = false;
   bool _longReply = false;
   int _chatRequest = 0;
@@ -118,6 +124,12 @@ class _PetRoomState extends State<PetRoom> with TickerProviderStateMixin {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _chatMotion = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 230),
+      reverseDuration: const Duration(milliseconds: 200),
+    );
     _idle = AnimationController(
       vsync: this,
       duration: const Duration(seconds: 3),
@@ -231,6 +243,10 @@ class _PetRoomState extends State<PetRoom> with TickerProviderStateMixin {
     _timer = Timer.periodic(const Duration(seconds: 5), (_) => _refresh());
     _refresh();
     if (_voiceLoading) unawaited(_loadVoice());
+    if (petNativeModelAvailable &&
+        defaultTargetPlatform == TargetPlatform.android) {
+      unawaited(_recoverPhoto());
+    }
   }
 
   Future<void> _loadVoice() async {
@@ -252,13 +268,34 @@ class _PetRoomState extends State<PetRoom> with TickerProviderStateMixin {
   }
 
   @override
+  void didChangeMetrics() {
+    if (!mounted || !_chatOpen) return;
+    if (View.of(context).viewInsets.bottom > 0) {
+      _hadChatKeyboard = true;
+      _keyboardDismissal?.cancel();
+      _keyboardDismissal = null;
+    } else if (_hadChatKeyboard && _keyboardDismissal == null) {
+      // A fold or rotation can briefly report no keyboard between frames.
+      _keyboardDismissal = Timer(const Duration(milliseconds: 150), () {
+        _keyboardDismissal = null;
+        if (mounted && _chatOpen && View.of(context).viewInsets.bottom == 0) {
+          _closeChat(cancelReply: false);
+        }
+      });
+    }
+  }
+
+  @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _keyboardDismissal?.cancel();
     _timer?.cancel();
     if (_usesIosLayout) _layoutChannel.setMethodCallHandler(null);
     _idle.dispose();
     _blink.dispose();
     _sweep.dispose();
     _patEffect.dispose();
+    _chatMotion.dispose();
     _message.dispose();
     _messageFocus.dispose();
     final voice = _voice;
@@ -328,7 +365,7 @@ class _PetRoomState extends State<PetRoom> with TickerProviderStateMixin {
     _greeting = true;
     final distance = petDayDifference(game.at, memory.at);
     final time = distance == 1 ? '어제' : '$distance일 전에';
-    final ending = game.disc ? '오늘도 원반으로 놀까?' : '오늘은 뭐 하고 놀까?';
+    final ending = game.disc ? '오늘도 공원에서 원반으로 놀까?' : '오늘은 뭐 하고 놀까?';
     final reply = await _reply(
       '추억: ${memory.title}. 저장 시점: $time.',
       '이 추억을 먼저 꺼내고 하고 싶은 놀이를 한마디로 이야기해.',
@@ -371,6 +408,7 @@ class _PetRoomState extends State<PetRoom> with TickerProviderStateMixin {
       '포만감': '${_game.fullness}/${_game.maxFullness}',
       '장소': _game.inPark ? '공원' : '집',
       '원반을 가지고 있음': _game.disc,
+      '원반 놀이 장소': '공원에서만',
       '참고': note,
     });
     try {
@@ -444,7 +482,7 @@ class _PetRoomState extends State<PetRoom> with TickerProviderStateMixin {
     _refresh();
   }
 
-  Future<void> _throw({bool left = false}) async {
+  Future<void> _throw({bool far = false}) async {
     _refresh(greet: false);
     if (_busy || !_game.canPlay(PetPlay.disc)) return;
     setState(() {
@@ -454,20 +492,15 @@ class _PetRoomState extends State<PetRoom> with TickerProviderStateMixin {
       _playReward = '';
       _bubble = '내가 받아올게!';
     });
-    final anchor = _game.inPark ? _park : _home;
-    final landing = _game.inPark
-        ? const Offset(.81, .64)
-        : left
-        ? const Offset(.40, .61)
-        : const Offset(.79, .63);
-    await _animateTo(anchor);
+    final landing = far ? const Offset(.87, .51) : _parkDiscLanding;
+    await _animateTo(_park);
     if (!mounted) return;
     setState(() => _discPosition = landing);
-    final outward = _game.inPark
-        ? [const Offset(.64, .69), landing]
-        : left
-        ? [const Offset(.43, .76), landing]
-        : [const Offset(.72, .81), landing];
+    final outward = [
+      const Offset(.64, .69),
+      _parkDiscLanding,
+      if (far) landing,
+    ];
     for (final point in outward) {
       await _animateTo(point, 280);
       if (!mounted || !_game.healthy) break;
@@ -478,8 +511,8 @@ class _PetRoomState extends State<PetRoom> with TickerProviderStateMixin {
       if (!mounted) return;
       setState(() => _discPosition = null);
       await _animateTo(landing, 170);
-      if (!_game.inPark && !left) await _animateTo(const Offset(.60, .63), 330);
-      await _animateTo(anchor, 440);
+      if (far) await _animateTo(_parkDiscLanding, 280);
+      await _animateTo(_park, 440);
     }
     if (!mounted) return;
     _game.advance(_game.now());
@@ -501,24 +534,24 @@ class _PetRoomState extends State<PetRoom> with TickerProviderStateMixin {
   Future<void> _chooseThrow() async {
     _refresh(greet: false);
     if (_busy || !_game.canPlay(PetPlay.disc)) return;
-    if (_game.level < 4 || _game.inPark) return _throw();
-    final left = await showDialog<bool>(
+    if (_game.level < 4) return _throw();
+    final far = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('어디에 던질까요?'),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('왼쪽'),
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('가까운 잔디'),
           ),
           FilledButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('오른쪽'),
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('벤치 너머'),
           ),
         ],
       ),
     );
-    if (left != null && mounted) await _throw(left: left);
+    if (far != null && mounted) await _throw(far: far);
   }
 
   void _tapPet() {
@@ -589,7 +622,6 @@ class _PetRoomState extends State<PetRoom> with TickerProviderStateMixin {
     if (!mounted) return;
     _game.advance(_game.now());
     final reward = training ? _game.play(PetPlay.walk) : null;
-    if (!training) _game.walk();
     setState(() {
       _busy = false;
       if (reward != null) _playReward = _rewardLabel(reward);
@@ -720,7 +752,7 @@ class _PetRoomState extends State<PetRoom> with TickerProviderStateMixin {
           Icons.trip_origin,
           '원반 ×${_game.discs.length}',
           _game.disc
-              ? '내구도 ${_game.discs.take(4).map((item) => '${item.remaining}/${item.maximum}').join(' · ')}${_game.discs.length > 4 ? ' 외 ${_game.discs.length - 4}개' : ''}'
+              ? '공원에서 던질 수 있어요. · 내구도 ${_game.discs.take(4).map((item) => '${item.remaining}/${item.maximum}').join(' · ')}${_game.discs.length > 4 ? ' 외 ${_game.discs.length - 4}개' : ''}'
               : '사진 속에서 찾아보세요.',
         ),
       ])
@@ -771,10 +803,17 @@ class _PetRoomState extends State<PetRoom> with TickerProviderStateMixin {
 
   Future<void> _import() async {
     final source = await _sheet<String>('아이템 얻기', [
+      if (_usesIosLayout ||
+          (!kIsWeb && defaultTargetPlatform == TargetPlatform.android))
+        FilledButton.tonalIcon(
+          onPressed: () => Navigator.pop(context, 'camera'),
+          icon: const Icon(Icons.photo_camera_outlined),
+          label: const Text('사진 찍기'),
+        ),
       FilledButton.tonalIcon(
         onPressed: () => Navigator.pop(context, 'photo'),
         icon: const Icon(Icons.photo_library_outlined),
-        label: const Text('사진 선택'),
+        label: const Text('앨범에서 선택'),
       ),
       OutlinedButton.icon(
         onPressed: () => Navigator.pop(context, 'sample'),
@@ -783,28 +822,61 @@ class _PetRoomState extends State<PetRoom> with TickerProviderStateMixin {
       ),
     ]);
     if (!mounted || source == null) return;
-    Uint8List? bytes;
-    List<String> labels = [];
-    final sample = source == 'sample';
-    if (!sample) {
-      try {
-        if (petNativeModelAvailable) {
-          final findings = await PhotoAnalysis().pickAndAnalyze();
-          bytes = findings?.imageBytes;
-          labels = findings?.labels ?? [];
-        } else {
-          final picked = await _picker.pickImage(
-            source: ImageSource.gallery,
-            maxWidth: 1400,
-          );
-          bytes = await picked?.readAsBytes();
-        }
-      } catch (_) {
-        if (mounted) _notice('사진을 열 수 없어요. 시연 장면으로 진행할 수 있어요.');
-      }
-      if (!mounted || bytes == null) return;
+    if (source == 'sample') {
+      await _reviewPhoto(sample: true);
+      return;
     }
-    final picked = bytes;
+
+    final imageSource = source == 'camera'
+        ? ImageSource.camera
+        : ImageSource.gallery;
+    PhotoFindings? findings;
+    try {
+      if (petNativeModelAvailable) {
+        findings = await _photoAnalysis.pickAndAnalyze(imageSource);
+      } else {
+        final picked = await _picker.pickImage(
+          source: imageSource,
+          maxWidth: 1400,
+        );
+        if (picked != null) {
+          findings = (imageBytes: await picked.readAsBytes(), labels: const []);
+        }
+      }
+    } catch (_) {
+      if (mounted) {
+        _notice(
+          imageSource == ImageSource.camera
+              ? '카메라를 열 수 없어요. 카메라 권한을 확인하거나 앨범에서 선택해 주세요.'
+              : '사진을 열 수 없어요. 시연 장면으로 진행할 수 있어요.',
+        );
+      }
+      return;
+    }
+    if (findings != null) {
+      await _reviewPhoto(picked: findings.imageBytes, labels: findings.labels);
+    }
+  }
+
+  Future<void> _recoverPhoto() async {
+    PhotoFindings? findings;
+    try {
+      findings = await _photoAnalysis.recoverOnAndroid();
+    } catch (_) {
+      if (mounted) _notice('사진을 다시 가져올 수 없어요. 가방에서 다시 시도해 주세요.');
+      return;
+    }
+    if (findings != null) {
+      await _reviewPhoto(picked: findings.imageBytes, labels: findings.labels);
+    }
+  }
+
+  Future<void> _reviewPhoto({
+    Uint8List? picked,
+    List<String> labels = const [],
+    bool sample = false,
+  }) async {
+    if (!mounted || !_game.alive) return;
     final memory = TextEditingController(text: sample ? '공원 소풍' : '');
     bool apple =
         sample || labels.any((label) => label.toLowerCase().contains('apple'));
@@ -902,7 +974,7 @@ class _PetRoomState extends State<PetRoom> with TickerProviderStateMixin {
     );
     final title = memory.text.trim();
     memory.dispose();
-    if (!mounted || !confirmed) return;
+    if (!mounted || !_game.alive || !confirmed) return;
     if (!apple && !disc && title.isEmpty) {
       _notice('담을 아이템이나 추억을 선택해주세요.');
       return;
@@ -914,7 +986,13 @@ class _PetRoomState extends State<PetRoom> with TickerProviderStateMixin {
   }
 
   void _openChat() {
+    if (_chatOpen) {
+      _messageFocus.requestFocus();
+      return;
+    }
+    _hadChatKeyboard = View.of(context).viewInsets.bottom > 0;
     setState(() => _chatOpen = true);
+    _chatMotion.forward();
     _messageFocus.requestFocus();
   }
 
@@ -925,12 +1003,17 @@ class _PetRoomState extends State<PetRoom> with TickerProviderStateMixin {
     _voice?.cancel();
   }
 
-  void _closeChat() {
+  void _closeChat({bool cancelReply = true}) {
+    if (!_chatOpen) return;
+    _keyboardDismissal?.cancel();
+    _keyboardDismissal = null;
+    _hadChatKeyboard = false;
     _messageFocus.unfocus();
     setState(() {
-      _cancelChatReply();
+      if (cancelReply) _cancelChatReply();
       _chatOpen = false;
     });
+    _chatMotion.reverse();
   }
 
   Future<void> _sendMessage() async {
@@ -979,7 +1062,34 @@ class _PetRoomState extends State<PetRoom> with TickerProviderStateMixin {
     _save();
   }
 
-  Widget _composer({bool inRail = false}) => Material(
+  Widget _animatedComposer({bool inRail = false}) => AnimatedBuilder(
+    animation: _chatMotion,
+    child: _composer(inRail: inRail),
+    builder: (context, child) {
+      if (!_game.alive || (_chatMotion.isDismissed && !_chatOpen)) {
+        return const SizedBox.shrink();
+      }
+      final progress = Curves.easeInOutCubic.transform(_chatMotion.value);
+      return IgnorePointer(
+        ignoring: !_chatOpen,
+        child: ExcludeSemantics(
+          excluding: !_chatOpen,
+          child: ClipRect(
+            child: Align(
+              alignment: Alignment.bottomCenter,
+              heightFactor: progress,
+              child: Transform.translate(
+                offset: Offset(0, 12 * (1 - progress)),
+                child: Opacity(opacity: progress, child: child),
+              ),
+            ),
+          ),
+        ),
+      );
+    },
+  );
+
+  Widget _composer({required bool inRail}) => Material(
     key: _composerKey,
     color: paper,
     borderRadius: inRail ? BorderRadius.circular(20) : BorderRadius.zero,
@@ -1018,7 +1128,7 @@ class _PetRoomState extends State<PetRoom> with TickerProviderStateMixin {
                     readOnly: _sending,
                     maxLength: 160,
                     textInputAction: TextInputAction.send,
-                    onTapOutside: (_) => _messageFocus.unfocus(),
+                    onTapOutside: (_) => _closeChat(cancelReply: false),
                     onSubmitted: (_) => unawaited(_sendMessage()),
                     decoration: const InputDecoration(
                       hintText: '무슨 말을 걸까요?',
@@ -1047,7 +1157,8 @@ class _PetRoomState extends State<PetRoom> with TickerProviderStateMixin {
     if (_game.fullness == 0) return '배가 꼬르륵해. 먼저 먹이 하나 줄래?';
     if (_game.waste >= 3) return '바닥을 치워주면 같이 놀 수 있어!';
     if (question.contains('원반') || question.contains('놀')) {
-      return _game.disc ? '좋아! 가방에서 원반을 던져줘.' : '원반이 생기면 같이 놀자.';
+      if (!_game.disc) return '원반이 생기면 같이 놀자.';
+      return _game.inPark ? '좋아! 잔디 쪽으로 던져줘.' : '공원에 가서 원반 던질까?';
     }
     if (memory.isNotEmpty &&
         (question.contains('기억') || question.contains('어제'))) {
@@ -1172,7 +1283,7 @@ class _PetRoomState extends State<PetRoom> with TickerProviderStateMixin {
       const Divider(),
       const Text('시연 시계', style: TextStyle(fontWeight: FontWeight.bold)),
       const Text(
-        '시연을 열어 첫날을 18시로 맞춘 뒤, 사과를 먹이고 원반으로 놀아주세요. 15시간과 24시간 시연은 각각 새로 시작하는 편이 정확해요.',
+        '시연을 열어 첫날을 18시로 맞춘 뒤, 방에서 사과를 먹이고 공원에서 원반으로 놀아주세요. 15시간과 24시간 시연은 각각 새로 시작하는 편이 정확해요.',
       ),
       const SizedBox(height: 8),
       OutlinedButton(
@@ -1279,11 +1390,10 @@ class _PetRoomState extends State<PetRoom> with TickerProviderStateMixin {
 
   void _replacePet(PetGame next, String greeting) {
     next.raisedKinds.addAll(_game.raisedKinds);
+    _closeChat();
     setState(() {
       _cancelChatReply();
       _message.clear();
-      _messageFocus.unfocus();
-      _chatOpen = false;
       _game = next;
       _position = _home;
       _discPosition = null;
@@ -1323,12 +1433,13 @@ class _PetRoomState extends State<PetRoom> with TickerProviderStateMixin {
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
     _syncToolbarActions();
-    final keyboardOpen =
-        _chatOpen && MediaQuery.viewInsetsOf(context).bottom > 0;
+    final keyboardOpen = MediaQuery.viewInsetsOf(context).bottom > 0;
     return Scaffold(
       body: SafeArea(
-        child: Padding(
+        child: AnimatedPadding(
           key: const ValueKey('room-safe-margin'),
+          duration: const Duration(milliseconds: 180),
+          curve: Curves.easeOutCubic,
           padding: EdgeInsets.only(bottom: keyboardOpen ? 0 : 20),
           child: LayoutBuilder(
             builder: (context, space) {
@@ -1347,7 +1458,7 @@ class _PetRoomState extends State<PetRoom> with TickerProviderStateMixin {
       child: Column(
         children: [
           Expanded(child: _compactScene(keyboardOpen)),
-          if (_chatOpen && _game.alive) _composer(),
+          _animatedComposer(),
         ],
       ),
     ),
@@ -1386,7 +1497,6 @@ class _PetRoomState extends State<PetRoom> with TickerProviderStateMixin {
         );
       }
       return ListView(
-        key: ValueKey(keyboardOpen),
         padding: padding,
         children: [
           if (!keyboardOpen) ...[_identity(), const SizedBox(height: 12)],
@@ -1453,7 +1563,7 @@ class _PetRoomState extends State<PetRoom> with TickerProviderStateMixin {
                                 ],
                               ),
                             ),
-                            if (!keyboardOpen)
+                            if (!keyboardOpen && !_chatOpen)
                               Padding(
                                 padding: const EdgeInsets.only(top: 12),
                                 child: _controlCard(_actions()),
@@ -1464,7 +1574,7 @@ class _PetRoomState extends State<PetRoom> with TickerProviderStateMixin {
                     ),
                   ),
                 ),
-                if (_chatOpen && _game.alive) _composer(inRail: true),
+                _animatedComposer(inRail: true),
               ],
             ),
           ),
@@ -1630,13 +1740,13 @@ class _PetRoomState extends State<PetRoom> with TickerProviderStateMixin {
           null,
         ),
       ],
-      (
-        Icons.trip_origin,
-        _canReplay ? '한 번 더 던지기' : '원반 던지기',
-        ready && _game.canPlay(PetPlay.disc) ? _chooseThrow : null,
-        _playHint(PetPlay.disc),
-      ),
       if (_game.inPark) ...[
+        (
+          Icons.trip_origin,
+          _canReplay ? '한 번 더 던지기' : '원반 던지기',
+          ready && _game.canPlay(PetPlay.disc) ? _chooseThrow : null,
+          _playHint(PetPlay.disc),
+        ),
         (
           Icons.park_outlined,
           '산책하기',

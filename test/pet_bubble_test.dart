@@ -4,9 +4,54 @@ import 'package:donglgewi/pet/pet_sprite.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:image_picker/image_picker.dart' show ImageSource;
 import 'package:material_ui/material_ui.dart';
 
 void main() {
+  testWidgets('photo actions live in the bag and open the matching picker', (
+    tester,
+  ) async {
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(440, 844);
+    addTearDown(tester.view.reset);
+
+    const channel = MethodChannel('plugins.flutter.io/image_picker');
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    final sources = <int>[];
+    messenger.setMockMethodCallHandler(channel, (call) async {
+      expect(call.method, 'pickImage');
+      sources.add(call.arguments['source'] as int);
+      return null;
+    });
+    addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
+
+    Future<void> tapLabel(String label) async {
+      final target = find.text(label);
+      await tester.ensureVisible(target);
+      await tester.tap(target);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 500));
+    }
+
+    await tester.runAsync(() async {
+      await tester.pumpWidget(const PetApp());
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+    });
+    await tester.pump();
+    expect(find.text('사진 찍기'), findsNothing);
+
+    for (final label in ['사진 찍기', '앨범에서 선택']) {
+      await tapLabel('가방');
+      await tapLabel('아이템 얻기');
+      await tapLabel(label);
+      expect(find.text('아이템 확인'), findsNothing);
+    }
+    expect(sources, [ImageSource.camera.index, ImageSource.gallery.index]);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
   testWidgets('park buttons launch outdoor activities and show play gains', (
     tester,
   ) async {
@@ -27,6 +72,7 @@ void main() {
       await Future<void>.delayed(const Duration(milliseconds: 100));
     });
     await tester.pump();
+    expect(find.text('원반 던지기'), findsNothing);
     await tapLabel('공원 산책');
     await tester.pump(const Duration(milliseconds: 500));
     expect(find.text('먹이기'), findsNothing);
@@ -64,6 +110,8 @@ void main() {
 
     await tapLabel('집으로');
     expect(find.text('산책하기'), findsNothing);
+    expect(find.text('원반 던지기'), findsNothing);
+    expect(find.text('한 번 더 던지기'), findsNothing);
     expect(find.text('먹이기'), findsWidgets);
     expect(find.text('청소하기'), findsOneWidget);
     expect(tester.takeException(), isNull);
@@ -96,7 +144,7 @@ void main() {
     expect(tester.widget<PetSprite>(sprite).blink, isTrue);
     await tester.pump(const Duration(milliseconds: 200));
     expect(tester.widget<PetSprite>(sprite).blink, isFalse);
-    final margin = tester.widget<Padding>(
+    final margin = tester.widget<AnimatedPadding>(
       find.byKey(const ValueKey('room-safe-margin')),
     );
     expect(margin.padding, const EdgeInsets.only(bottom: 20));
@@ -259,6 +307,7 @@ void main() {
 
     await native('roomToolbarAction', 'talk');
     await tester.pump();
+    await tester.pump(const Duration(milliseconds: 250));
     final input = find.byType(EditableText);
     await tester.enterText(input, '우리 뭐 하고 놀까?');
 
@@ -282,11 +331,31 @@ void main() {
     await native('roomToolbarVisibleChanged', true);
     tester.view.physicalSize = const Size(440, 640);
     tester.view.padding = const FakeViewPadding(right: 89, top: 18, bottom: 20);
+    tester.view.viewInsets = const FakeViewPadding();
+    await tester.pump(const Duration(milliseconds: 80));
     tester.view.viewInsets = const FakeViewPadding(bottom: 300);
-    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 250));
     expect(controls, findsNothing);
     expect(tester.widget<EditableText>(input).controller.text, '우리 뭐 하고 놀까?');
     expect(tester.getBottomLeft(input).dy, lessThan(340));
+
+    tester.view.viewInsets = const FakeViewPadding();
+    await tester.pump(const Duration(milliseconds: 150));
+    await tester.pump(const Duration(milliseconds: 220));
+    expect(input, findsNothing);
+    expect(find.text('먹이기'), findsOneWidget);
+    expect(calls.last.arguments, containsPair('bag', true));
+    await native('roomToolbarAction', 'bag');
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(find.text('아이템 얻기'), findsOneWidget);
+    tester.state<NavigatorState>(find.byType(Navigator)).pop();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+    await native('roomToolbarAction', 'talk');
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 250));
+    expect(tester.widget<EditableText>(input).controller.text, '우리 뭐 하고 놀까?');
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox.shrink());
   });
@@ -307,7 +376,7 @@ void main() {
     await tester.pump();
 
     tester.view.viewInsets = const FakeViewPadding(bottom: 300);
-    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 250));
     final input = find.byType(EditableText);
     await tester.enterText(input, '아직 보내지 않은 말');
     expect(tester.widget<EditableText>(input).focusNode.hasFocus, isTrue);
@@ -315,9 +384,14 @@ void main() {
     await tester.tapAt(tester.getTopLeft(stage) + const Offset(24, 18));
     await tester.pump();
     expect(tester.widget<EditableText>(input).focusNode.hasFocus, isFalse);
-    expect(tester.widget<EditableText>(input).controller.text, '아직 보내지 않은 말');
-    await tester.tap(input);
+    tester.view.viewInsets = const FakeViewPadding();
+    await tester.pump(const Duration(milliseconds: 220));
+    expect(input, findsNothing);
+    await tester.tap(find.text('말 걸기'));
     await tester.pump();
+    tester.view.viewInsets = const FakeViewPadding(bottom: 300);
+    await tester.pump(const Duration(milliseconds: 250));
+    expect(tester.widget<EditableText>(input).controller.text, '아직 보내지 않은 말');
     await tester.enterText(input, '원반으로 놀까?');
     await tester.tap(find.text('보내기'));
     await tester.pump();

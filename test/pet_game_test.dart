@@ -12,7 +12,8 @@ void main() {
     game.addFinds('공원 소풍', apple: true, frisbee: false);
     game.discs.add(const PetDisc(3, 3));
     expect(game.feed(apple: true), isTrue);
-    game.play();
+    game.inPark = true;
+    expect(game.play(), isNotNull);
     return game;
   }
 
@@ -37,6 +38,8 @@ void main() {
       game.advance(firstEvening.add(hour * 24));
       expect((game.fullness, game.waste, game.healthy), (0, 1, false));
       expect(game.alive, isTrue);
+      expect(game.feed(apple: false), isFalse);
+      game.inPark = false;
       expect(game.feed(apple: false), isTrue);
       expect(game.healthy, isTrue);
       expect(game.nextMemory?.title, '공원 소풍');
@@ -50,6 +53,7 @@ void main() {
       final game = firstVisit();
       final secondEvening = firstEvening.add(hour * 24);
       game.advance(secondEvening);
+      game.inPark = false;
       expect(game.clean(), isTrue);
       for (var index = 0; index < 3; index++) {
         expect(game.feed(apple: false), isTrue);
@@ -88,11 +92,13 @@ void main() {
         ..level = 2
         ..discs.add(const PetDisc(3, 3));
       expect(game.play(PetPlay.walk), isNull);
+      expect(game.play(PetPlay.disc), isNull);
+      expect((game.energy, game.discs.single.remaining), (384, 3));
+      game.inPark = true;
       final disc = game.play(PetPlay.disc)!;
       expect(disc.gains, {'민첩': 1, '자신감': 1, '기분': 1});
       expect(game.energy, 352);
 
-      game.inPark = true;
       final stroll = game.play(PetPlay.walk)!;
       expect(stroll.gains, {'호기심': 1, '기분': 1});
       expect(game.energy, 336);
@@ -207,7 +213,9 @@ void main() {
       )!;
       expect((disc.maximum, disc.remaining), (expected, expected));
     }
-    final restored = PetGame.decode(game.encode())..energy = 31;
+    final restored = PetGame.decode(game.encode())
+      ..inPark = true
+      ..energy = 31;
     expect(restored.play(), isNull);
     expect(restored.discs.length, 10);
     restored.energy = 384;

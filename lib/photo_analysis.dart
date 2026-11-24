@@ -4,19 +4,31 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 
+typedef PhotoFindings = ({Uint8List imageBytes, List<String> labels});
+
 class PhotoAnalysis {
   final _picker = ImagePicker();
   static const _channel = MethodChannel('donglgewi/photos');
 
-  Future<({Uint8List imageBytes, List<String> labels})?>
-  pickAndAnalyze() async {
+  Future<PhotoFindings?> pickAndAnalyze(ImageSource source) async {
     final image = await _picker.pickImage(
-      source: ImageSource.gallery,
+      source: source,
       maxWidth: 2400,
       maxHeight: 2400,
       requestFullMetadata: false,
     );
-    if (image == null) return null;
+    return image == null ? null : _analyze(image);
+  }
+
+  Future<PhotoFindings?> recoverOnAndroid() async {
+    final result = await _picker.retrieveLostData();
+    final error = result.exception;
+    if (error != null) throw error;
+    final files = result.files;
+    return files == null || files.isEmpty ? null : _analyze(files.first);
+  }
+
+  Future<PhotoFindings> _analyze(XFile image) async {
     try {
       final bytes = await image.readAsBytes();
       List<String> labels;

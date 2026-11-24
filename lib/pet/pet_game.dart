@@ -307,10 +307,11 @@ class PetGame {
 
   bool canPlay(PetPlay activity) =>
       healthy &&
+      inPark &&
       energy >= activity.cost &&
       switch (activity) {
         PetPlay.disc => disc,
-        PetPlay.walk => inPark,
+        PetPlay.walk => true,
       };
 
   PetPlayResult? play([PetPlay activity = PetPlay.disc]) {
