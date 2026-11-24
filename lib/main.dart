@@ -84,6 +84,7 @@ class _PetRoomState extends State<PetRoom> with TickerProviderStateMixin {
   final _blink = ValueNotifier(false);
   late final AnimationController _idle;
   late final AnimationController _sweep;
+  late final AnimationController _patEffect;
   late PetGame _game;
   PetVoice? _voice;
   Timer? _timer;
@@ -102,6 +103,8 @@ class _PetRoomState extends State<PetRoom> with TickerProviderStateMixin {
   bool _sending = false;
   bool _longReply = false;
   int _chatRequest = 0;
+  DateTime? _firstPat;
+  int _patCount = 0;
   double? _download;
   String _bubble = '안녕! 우리 방에 온 걸 환영해.';
   String _playReward = '';
@@ -123,6 +126,11 @@ class _PetRoomState extends State<PetRoom> with TickerProviderStateMixin {
       ..addListener(() => _blink.value = _idle.value > .975)
       ..repeat(reverse: true);
     _sweep = AnimationController(vsync: this, duration: _cleanDuration);
+    _patEffect = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 680),
+      value: 1,
+    );
     if (_usesIosLayout) {
       _layoutChannel.setMethodCallHandler((call) async {
         if (call.method == 'roomToolbarVisibleChanged') {
@@ -250,6 +258,7 @@ class _PetRoomState extends State<PetRoom> with TickerProviderStateMixin {
     _idle.dispose();
     _blink.dispose();
     _sweep.dispose();
+    _patEffect.dispose();
     _message.dispose();
     _messageFocus.dispose();
     final voice = _voice;
@@ -356,6 +365,7 @@ class _PetRoomState extends State<PetRoom> with TickerProviderStateMixin {
     if (voice == null || limit < 12) return null;
     final state = jsonEncode({
       '캐릭터': _game.kind.label,
+      '성향': _game.personality.traits,
       '건강': _game.healthLabel,
       '기분': _game.moodLabel,
       '포만감': '${_game.fullness}/${_game.maxFullness}',
@@ -513,8 +523,40 @@ class _PetRoomState extends State<PetRoom> with TickerProviderStateMixin {
 
   void _tapPet() {
     if (!_game.alive || _busy) return;
+    _refresh(greet: false);
+    if (!_game.alive) return;
+    final now = DateTime.now();
+    if (_firstPat == null ||
+        now.difference(_firstPat!) >= const Duration(seconds: 8)) {
+      _firstPat = now;
+      _patCount = 0;
+    }
+    _patCount++;
+    final response = !_game.healthy
+        ? '지금은 불편해. 먼저 돌봐줘.'
+        : _game.mood < 4
+        ? '지금은 기분이 안 좋아. 조금만 쉬고 싶어.'
+        : _patCount >= 4
+        ? '너무 많이 만지면 싫어. 잠깐 쉬게 해줘.'
+        : null;
+    if (response != null) {
+      _patEffect.value = 1;
+      final annoyed = _patCount == 4 && _game.healthy && _game.mood >= 4;
+      setState(() {
+        _cancelChatReply();
+        if (annoyed) _game.moodChange(-1);
+        _bubble = response;
+      });
+      if (annoyed) _save();
+      return;
+    }
     _game.mark(PetActivity.bond);
-    setState(() => _facingLeft = !_facingLeft);
+    setState(() {
+      _cancelChatReply();
+      _facingLeft = !_facingLeft;
+      _bubble = '헤헤, 좋아!';
+    });
+    _patEffect.forward(from: 0);
     _save();
   }
 
@@ -572,14 +614,30 @@ class _PetRoomState extends State<PetRoom> with TickerProviderStateMixin {
 
   Future<void> _restInPark() async {
     if (_busy || !_game.inPark || !_game.alive) return;
+    _refresh(greet: false);
+    if (!_game.alive) return;
+    final recovering = _game.canRecoverAtBench;
     setState(() {
       _cancelChatReply();
       _busy = true;
       if (_game.healthy) _bubble = '벤치 옆에서 잠깐 쉬자.';
     });
     await _animateTo(_parkBench, 430);
+    if (recovering && mounted) {
+      await Future<void>.delayed(const Duration(milliseconds: 2500));
+    }
     if (!mounted) return;
-    setState(() => _busy = false);
+    _refresh(greet: false);
+    final restored = _game.recoverAtBench();
+    setState(() {
+      _busy = false;
+      if (restored > 0) {
+        _playReward =
+            '체력 +${_game.energyPercent(restored).toStringAsFixed(1)}%';
+        if (_game.healthy) _bubble = '잠깐 쉬니까 힘이 나!';
+      }
+    });
+    if (restored > 0) _save();
     _refresh();
   }
 
@@ -1023,19 +1081,72 @@ class _PetRoomState extends State<PetRoom> with TickerProviderStateMixin {
       ),
   ]);
 
-  Future<void> _petInfo() => _sheet<void>('${_game.kind.label}의 능력치', [
-    for (final (label, value) in [
-      ('기분', _game.mood),
-      ('자신감', _game.confidence),
-      ('민첩', _game.agility),
-      ('호기심', _game.curiosity),
-    ])
-      ListTile(
-        contentPadding: EdgeInsets.zero,
-        title: Text(label),
-        trailing: Text('$value/10'),
+  String _petTime(Duration time) {
+    final minutes = math.max(0, time.inMinutes);
+    return [
+      if (minutes >= 1440) '${minutes ~/ 1440}일',
+      if (minutes >= 60) '${minutes ~/ 60 % 24}시간',
+      '${minutes % 60}분',
+    ].join(' ');
+  }
+
+  Future<void> _petInfo() async {
+    _refresh(greet: false);
+    final game = _game;
+    final time = game.nextStageAt?.difference(game.at);
+    final affectionNeeded = math.max(0, game.nextAffection - game.affection);
+    await _sheet<void>('${game.kind.label} 펫 정보', [
+      Text(
+        '${game.stage} · Lv. ${game.level}',
+        style: Theme.of(context).textTheme.titleMedium,
       ),
-  ]);
+      Text('함께한 시간 ${_petTime(game.at.difference(game.born))}'),
+      if (time != null) ...[
+        const SizedBox(height: 8),
+        Text('다음 성장 · ${game.level < 3 ? '꼬마' : '성체'}'),
+        Text(
+          affectionNeeded > 0
+              ? '애정도 ${game.affection}/${game.nextAffection}'
+              : '애정도 ${game.affection} · 기준 충족',
+        ),
+        if (affectionNeeded > 0) Text('애정도 $affectionNeeded 더 필요해요.'),
+        if (time > Duration.zero)
+          Text('성장까지 약 ${_petTime(time + const Duration(seconds: 59))}'),
+        if (game.alive && !game.healthy) const Text('건강이 회복되면 성장할 수 있어요.'),
+      ] else
+        const Text('성체까지 자랐어요.'),
+      const Divider(),
+      Text(
+        '성격 · ${game.personality.code}',
+        style: Theme.of(context).textTheme.titleMedium,
+      ),
+      Wrap(
+        spacing: 6,
+        children: [
+          for (final trait in game.personality.traits) Chip(label: Text(trait)),
+        ],
+      ),
+      Text(game.personality.active ? '좋아하는 활동 · 원반 놀이' : '좋아하는 활동 · 벤치에서 쉬기'),
+      const Divider(),
+      Text('능력치', style: Theme.of(context).textTheme.titleMedium),
+      for (final (label, value) in [
+        ('기분', game.mood),
+        ('자신감', game.confidence),
+        ('민첩', game.agility),
+        ('호기심', game.curiosity),
+      ])
+        ListTile(
+          contentPadding: EdgeInsets.zero,
+          title: Text(label),
+          trailing: Text('$value/10'),
+        ),
+      Text('체력 $_energyLabel'),
+      if (game.nextRecovery case final recovery?)
+        Text(
+          '다음 자동 회복 약 ${_petTime(recovery.difference(game.at) + const Duration(seconds: 59))}',
+        ),
+    ]);
+  }
 
   Future<void> _settings() async {
     final choice = await _sheet<String>('설정', [
@@ -1179,6 +1290,9 @@ class _PetRoomState extends State<PetRoom> with TickerProviderStateMixin {
       _canReplay = false;
       _facingLeft = false;
       _playReward = '';
+      _firstPat = null;
+      _patCount = 0;
+      _patEffect.value = 1;
       _bubble = greeting;
     });
     _save();
@@ -1374,27 +1488,11 @@ class _PetRoomState extends State<PetRoom> with TickerProviderStateMixin {
       final title = Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Tooltip(
-            message: '펫 정보',
-            child: InkWell(
-              onTap: _busy ? null : _petInfo,
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Flexible(
-                    child: Text(
-                      _game.kind.label,
-                      style: Theme.of(context).textTheme.headlineSmall
-                          ?.copyWith(
-                            fontWeight: FontWeight.w800,
-                            letterSpacing: -.9,
-                          ),
-                    ),
-                  ),
-                  const SizedBox(width: 4),
-                  const Icon(Icons.chevron_right, size: 17),
-                ],
-              ),
+          Text(
+            _game.kind.label,
+            style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+              fontWeight: FontWeight.w800,
+              letterSpacing: -.9,
             ),
           ),
           Text(
@@ -1414,11 +1512,25 @@ class _PetRoomState extends State<PetRoom> with TickerProviderStateMixin {
           style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700),
         ),
       );
-      if (space.maxWidth < 205 ||
+      final details = Wrap(
+        spacing: 4,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        children: [
+          health,
+          TextButton(
+            onPressed: _busy ? null : _petInfo,
+            style: TextButton.styleFrom(
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+            ),
+            child: const Text('펫 정보'),
+          ),
+        ],
+      );
+      if (space.maxWidth < 270 ||
           MediaQuery.textScalerOf(context).scale(14) > 19) {
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
-          children: [title, const SizedBox(height: 6), health],
+          children: [title, const SizedBox(height: 2), details],
         );
       }
       return Row(
@@ -1426,7 +1538,7 @@ class _PetRoomState extends State<PetRoom> with TickerProviderStateMixin {
         children: [
           Expanded(child: title),
           const SizedBox(width: 8),
-          health,
+          Flexible(child: details),
         ],
       );
     },
@@ -1531,7 +1643,12 @@ class _PetRoomState extends State<PetRoom> with TickerProviderStateMixin {
           ready && _game.canPlay(PetPlay.walk) ? _walkInPark : null,
           _playHint(PetPlay.walk),
         ),
-        (Icons.favorite_border, '벤치에서 쉬기', ready ? _restInPark : null, null),
+        (
+          Icons.favorite_border,
+          '벤치에서 쉬기',
+          ready ? _restInPark : null,
+          _game.canRecoverAtBench ? '벤치에서 쉬고 체력을 회복해요.' : null,
+        ),
       ],
       if (showTalk)
         (Icons.chat_bubble_outline, '말 걸기', ready ? _openChat : null, null),
@@ -1731,6 +1848,8 @@ class _PetRoomState extends State<PetRoom> with TickerProviderStateMixin {
                     width: 48,
                     height: 48,
                     child: Semantics(
+                      key: ValueKey('room-waste-$index'),
+                      container: true,
                       label: '배변 치우기',
                       button: true,
                       enabled: _game.alive && !_busy,
@@ -1772,9 +1891,12 @@ class _PetRoomState extends State<PetRoom> with TickerProviderStateMixin {
                     width: size,
                     height: size * .7,
                     child: Semantics(
+                      container: true,
                       button: true,
                       label: '${_game.kind.label} 톡 누르기',
                       child: GestureDetector(
+                        key: const ValueKey('pet-touch-target'),
+                        behavior: HitTestBehavior.opaque,
                         onTap: _tapPet,
                         child: Stack(
                           alignment: Alignment.bottomCenter,
@@ -1811,6 +1933,14 @@ class _PetRoomState extends State<PetRoom> with TickerProviderStateMixin {
                         ),
                       ),
                     ),
+                  ),
+                if (_game.alive)
+                  Positioned(
+                    left: petX - size * .72,
+                    top: petTop + size * .06,
+                    width: size * 1.44,
+                    height: size * .72,
+                    child: _patHearts(),
                   ),
                 if (_game.alive && (_sending || _bubble.isNotEmpty))
                   _speechBubble(width, height, petX, petTop, size),
@@ -1864,6 +1994,53 @@ class _PetRoomState extends State<PetRoom> with TickerProviderStateMixin {
           : AspectRatio(aspectRatio: 1.5, child: surface),
     );
   }
+
+  Widget _patHearts() => IgnorePointer(
+    child: ExcludeSemantics(
+      child: AnimatedBuilder(
+        animation: _patEffect,
+        builder: (context, _) {
+          final progress = _patEffect.value;
+          if (progress >= 1) return const SizedBox.shrink();
+          return Opacity(
+            opacity: 1 - Curves.easeIn.transform(progress),
+            child: Transform.translate(
+              offset: Offset(0, -23 * progress),
+              child: const Stack(
+                key: ValueKey('pet-pat-hearts'),
+                children: [
+                  Align(
+                    alignment: Alignment(-.92, -.1),
+                    child: Icon(
+                      Icons.favorite,
+                      color: Color(0xffd76a75),
+                      size: 15,
+                    ),
+                  ),
+                  Align(
+                    alignment: Alignment(.90, -.7),
+                    child: Icon(
+                      Icons.favorite,
+                      color: Color(0xffe57378),
+                      size: 18,
+                    ),
+                  ),
+                  Align(
+                    alignment: Alignment(.99, .14),
+                    child: Icon(
+                      Icons.favorite,
+                      color: Color(0xffe58f89),
+                      size: 11,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+    ),
+  );
 
   Widget _cleanProgress() => Semantics(
     liveRegion: true,

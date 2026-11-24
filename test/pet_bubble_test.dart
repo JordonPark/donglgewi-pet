@@ -115,6 +115,42 @@ void main() {
     await tapLabel('앨범·도감');
     expect(find.text('키워봤어요'), findsOneWidget);
     expect(find.text('지금 키우는 중'), findsOneWidget);
+    tester.state<NavigatorState>(find.byType(Navigator)).pop();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 450));
+    await tapLabel('펫 정보');
+    expect(find.text('별꼬리 펫 정보'), findsOneWidget);
+    expect(find.text('다음 성장 · 꼬마'), findsOneWidget);
+    expect(find.textContaining('성격 · '), findsOneWidget);
+    expect(find.text('능력치'), findsOneWidget);
+    expect(find.text('호기심'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('the pet shows hearts and asks for space after repeated taps', (
+    tester,
+  ) async {
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(440, 844);
+    addTearDown(tester.view.reset);
+    await tester.runAsync(() async {
+      await tester.pumpWidget(const PetApp());
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+    });
+    await tester.pump();
+    final pet = find.byKey(const ValueKey('pet-touch-target'));
+    final hearts = find.byKey(const ValueKey('pet-pat-hearts'));
+    await tester.tap(pet);
+    await tester.pump(const Duration(milliseconds: 16));
+    expect(find.text('헤헤, 좋아!'), findsOneWidget);
+    expect(hearts, findsOneWidget);
+    for (var tap = 0; tap < 3; tap++) {
+      await tester.tap(pet);
+      await tester.pump(const Duration(milliseconds: 80));
+    }
+    expect(hearts, findsNothing);
+    expect(find.text('너무 많이 만지면 싫어. 잠깐 쉬게 해줘.'), findsOneWidget);
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox.shrink());
   });
@@ -149,7 +185,7 @@ void main() {
     await tapLabel('설정');
     await tapLabel('15시간 뒤 재방문');
 
-    final waste = find.bySemanticsLabel('배변 치우기');
+    final waste = find.byKey(const ValueKey('room-waste-0'));
     final progress = find.text('청소 중');
     expect(waste, findsOneWidget);
     await tester.tap(waste);

@@ -130,6 +130,7 @@ void main() {
     for (final field in [
       'kind',
       'raisedKinds',
+      'personality',
       'confidence',
       'agility',
       'curiosity',
@@ -142,6 +143,10 @@ void main() {
     expect((restored.kind, restored.energy), (PetKind.dongle, 123));
     expect(restored.raisedKinds, unorderedEquals([PetKind.dongle]));
     expect(
+      restored.personality.code,
+      PetGame.decode(jsonEncode(oldSave)).personality.code,
+    );
+    expect(
       (restored.discs.single.maximum, restored.discs.single.remaining),
       (3, 3),
     );
@@ -150,6 +155,35 @@ void main() {
       (5, 0, 0),
     );
   });
+
+  test('bench recovery is limited by time and persists across reloads', () {
+    final game = PetGame(firstEvening)..energy = 300;
+    expect(game.recoverAtBench(), 0);
+    game.inPark = true;
+    expect(game.recoverAtBench(), 32);
+    expect(game.energy, 332);
+    final restored = PetGame.decode(game.encode());
+    expect(restored.recoverAtBench(), 0);
+    restored.advance(firstEvening.add(const Duration(minutes: 10)));
+    expect(restored.recoverAtBench(), 32);
+    restored.advance(firstEvening.add(const Duration(minutes: 20)));
+    expect(restored.recoverAtBench(), 20);
+    expect(restored.energy, restored.maxEnergy);
+  });
+
+  test(
+    'the sixteen personality combinations have distinct persisted codes',
+    () {
+      final codes = <String>{};
+      for (var bits = 0; bits < 16; bits++) {
+        final game = PetGame(firstEvening, personality: PetPersonality(bits));
+        final restored = PetGame.decode(game.encode());
+        expect(restored.personality.traits, game.personality.traits);
+        codes.add(restored.personality.code);
+      }
+      expect(codes, hasLength(16));
+    },
+  );
 
   test('each photo rolls a disc and only a completed throw consumes a use', () {
     final game = PetGame(firstEvening)..level = 2;

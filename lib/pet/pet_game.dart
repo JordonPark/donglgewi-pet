@@ -61,16 +61,45 @@ class PetMemory {
   Map<String, Object> toJson() => {'title': title, 'at': at.toIso8601String()};
 }
 
+class PetPersonality {
+  const PetPersonality(this.bits);
+
+  final int bits;
+
+  bool get active => (bits & 2) != 0;
+  String get code => [
+    (bits & 1) != 0 ? 'E' : 'I',
+    (bits & 4) != 0 ? 'N' : 'S',
+    (bits & 8) != 0 ? 'F' : 'T',
+    active ? 'P' : 'J',
+  ].join();
+
+  List<String> get traits => [
+    (bits & 1) != 0 ? '먼저 제안하기' : '이야기에 호응하기',
+    active ? '활발하게 놀기' : '느긋하게 쉬기',
+    (bits & 4) != 0 ? '새로운 것을 좋아함' : '익숙한 것을 좋아함',
+    (bits & 8) != 0 ? '상상해서 표현하기' : '솔직하게 표현하기',
+  ];
+}
+
 class PetGame {
-  PetGame(DateTime now, {this.kind = PetKind.dongle})
-    : at = now,
-      born = now,
-      nextHunger = now.add(hour * 6) {
+  static const benchRecovery = 32;
+  static const benchInterval = Duration(minutes: 10);
+
+  PetGame(
+    DateTime now, {
+    this.kind = PetKind.dongle,
+    PetPersonality? personality,
+  }) : at = now,
+       born = now,
+       nextHunger = now.add(hour * 6),
+       personality = personality ?? PetPersonality(math.Random().nextInt(16)) {
     suppliedDay = petDay(now);
     raisedKinds.add(kind);
   }
 
   final PetKind kind;
+  final PetPersonality personality;
   final Set<PetKind> raisedKinds = {};
   DateTime at;
   DateTime born;
@@ -79,6 +108,7 @@ class PetGame {
   DateTime? hygieneDeadline;
   DateTime? lastWaste;
   DateTime? nextRecovery;
+  DateTime? lastBenchRest;
   final List<DateTime> digestion = [];
   final List<PetMemory> memories = [];
   final List<PetDisc> discs = [];
@@ -115,8 +145,18 @@ class PetGame {
       ? 4
       : 5;
   int get maxEnergy => 320 + 64 * level;
+  bool get canRecoverAtBench =>
+      alive &&
+      inPark &&
+      energy < maxEnergy &&
+      (lastBenchRest == null || at.difference(lastBenchRest!) >= benchInterval);
   double energyPercent(int amount) => amount * 100 / maxEnergy;
   int get nextAffection => level < 3 ? 3 : 8;
+  DateTime? get nextStageAt => switch (level) {
+    < 3 => born.add(hour * math.max(24, 30 - (math.max(affection, 3) - 3) * 3)),
+    < 5 => born.add(hour * math.max(72, 96 - (math.max(affection, 8) - 8) * 6)),
+    _ => null,
+  };
   String get stage => level < 3
       ? '아기'
       : level < 5
@@ -143,13 +183,9 @@ class PetGame {
     if (!healthy) return null;
     return switch (level) {
       1 when affection >= 1 => born,
-      2 when affection >= 3 => born.add(
-        hour * math.max(24, 30 - (affection - 3) * 3),
-      ),
+      2 when affection >= 3 => nextStageAt,
       3 when affection >= 5 => born.add(hour * 36),
-      4 when affection >= 8 => born.add(
-        hour * math.max(72, 96 - (affection - 8) * 6),
-      ),
+      4 when affection >= 8 => nextStageAt,
       _ => null,
     };
   }
@@ -362,6 +398,15 @@ class PetGame {
     nextRecovery = at.add(recoveryInterval);
   }
 
+  int recoverAtBench() {
+    if (!canRecoverAtBench) return 0;
+    final recovered = math.min(benchRecovery, maxEnergy - energy);
+    lastBenchRest = at;
+    energy += recovered;
+    if (energy == maxEnergy) nextRecovery = null;
+    return recovered;
+  }
+
   PetMemory? get nextMemory {
     final candidates = memories.reversed.where((memory) {
       final age = petDayDifference(at, memory.at);
@@ -375,6 +420,7 @@ class PetGame {
 
   String encode() => jsonEncode({
     'kind': kind.name,
+    'personality': personality.bits,
     'raisedKinds': raisedKinds.map((kind) => kind.name).toList(),
     'at': at.toIso8601String(),
     'born': born.toIso8601String(),
@@ -383,6 +429,7 @@ class PetGame {
     'hygieneDeadline': hygieneDeadline?.toIso8601String(),
     'lastWaste': lastWaste?.toIso8601String(),
     'nextRecovery': nextRecovery?.toIso8601String(),
+    'lastBenchRest': lastBenchRest?.toIso8601String(),
     'digestion': digestion.map((time) => time.toIso8601String()).toList(),
     'memories': memories.map((memory) => memory.toJson()).toList(),
     'activities': activities.map((activity) => activity.name).toList(),
@@ -417,35 +464,47 @@ class PetGame {
     DateTime? date(String key) => DateTime.tryParse(json[key] as String? ?? '');
     String string(String key) => json[key] as String? ?? '';
     int integer(String key, int fallback) => json[key] as int? ?? fallback;
-    final game = PetGame(date('at')!, kind: PetKind.fromName(json['kind']))
-      ..born = date('born')!
-      ..nextHunger = date('nextHunger')
-      ..hungerDeadline = date('hungerDeadline')
-      ..hygieneDeadline = date('hygieneDeadline')
-      ..lastWaste = date('lastWaste')
-      ..nextRecovery = date('nextRecovery')
-      ..suppliedDay = string('suppliedDay')
-      ..affectionDay = string('affectionDay')
-      ..greetingDay = string('greetingDay')
-      ..greeting = string('greeting')
-      ..lastMemory = string('lastMemory')
-      ..lastWarning = string('lastWarning')
-      ..death = string('death')
-      ..fullness = integer('fullness', 2)
-      ..waste = integer('waste', 0)
-      ..affection = integer('affection', 0)
-      ..mood = integer('mood', 5)
-      ..confidence = integer('confidence', 5).clamp(0, 10)
-      ..agility = integer('agility', 0).clamp(0, 10)
-      ..curiosity = integer('curiosity', 0).clamp(0, 10)
-      ..level = integer('level', 1)
-      ..energy = integer('energy', 384)
-      ..apples = integer('apples', 0)
-      ..pantry = integer('pantry', 3)
-      ..plays = integer('plays', 0)
-      ..timeOffsetMs = integer('timeOffsetMs', 0)
-      ..inPark = json['inPark'] == true
-      ..demoClock = json['demoClock'] == true;
+    final born = date('born')!;
+    final game =
+        PetGame(
+            date('at')!,
+            kind: PetKind.fromName(json['kind']),
+            personality: PetPersonality(
+              integer(
+                'personality',
+                born.millisecondsSinceEpoch % 16,
+              ).clamp(0, 15),
+            ),
+          )
+          ..born = born
+          ..nextHunger = date('nextHunger')
+          ..hungerDeadline = date('hungerDeadline')
+          ..hygieneDeadline = date('hygieneDeadline')
+          ..lastWaste = date('lastWaste')
+          ..nextRecovery = date('nextRecovery')
+          ..lastBenchRest = date('lastBenchRest')
+          ..suppliedDay = string('suppliedDay')
+          ..affectionDay = string('affectionDay')
+          ..greetingDay = string('greetingDay')
+          ..greeting = string('greeting')
+          ..lastMemory = string('lastMemory')
+          ..lastWarning = string('lastWarning')
+          ..death = string('death')
+          ..fullness = integer('fullness', 2)
+          ..waste = integer('waste', 0)
+          ..affection = integer('affection', 0)
+          ..mood = integer('mood', 5)
+          ..confidence = integer('confidence', 5).clamp(0, 10)
+          ..agility = integer('agility', 0).clamp(0, 10)
+          ..curiosity = integer('curiosity', 0).clamp(0, 10)
+          ..level = integer('level', 1)
+          ..energy = integer('energy', 384)
+          ..apples = integer('apples', 0)
+          ..pantry = integer('pantry', 3)
+          ..plays = integer('plays', 0)
+          ..timeOffsetMs = integer('timeOffsetMs', 0)
+          ..inPark = json['inPark'] == true
+          ..demoClock = json['demoClock'] == true;
     if (json['raisedKinds'] case final List kinds) {
       game.raisedKinds.addAll(
         PetKind.values.where((kind) => kinds.contains(kind.name)),
