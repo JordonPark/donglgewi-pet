@@ -285,19 +285,27 @@ void main() {
           matching: find.byType(ListTile),
         );
         expect(
+          find.descendant(of: twoMeals, matching: find.text('포만감 2칸')),
+          findsOneWidget,
+        );
+        expect(find.textContaining('예상 배변'), findsNothing);
+        await label('예상 시간 보기');
+        expect(
           find.descendant(
             of: twoMeals,
-            matching: find.textContaining('청소 전 예상 배변 2/3'),
+            matching: find.textContaining('예상 배변 2/3'),
           ),
           findsOneWidget,
         );
         expect(
           find.descendant(
             of: twoMeals,
-            matching: find.textContaining(RegExp(r'돌보지 않으면 .* · 굶주림 위험')),
+            matching: find.textContaining(RegExp(r'^방치 시 굶주림 위험 .*\d:\d\d')),
           ),
           findsOneWidget,
         );
+        await label('예상 시간 접기');
+        expect(find.textContaining('예상 배변'), findsNothing);
         await label('기본 먹이 2개');
         await frames(3);
         expect(
@@ -498,6 +506,61 @@ void main() {
       },
     );
   }
+
+  testWidgets('the food picker shows a common hygiene warning once', (
+    tester,
+  ) async {
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(390, 844);
+    addTearDown(tester.view.reset);
+    await tester.runAsync(() async {
+      await tester.pumpWidget(const PetApp());
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+    });
+    await tester.pump();
+
+    Future<void> press(Finder target) async {
+      await tester.ensureVisible(target);
+      await tester.tap(target);
+      await tester.pump();
+      for (var frame = 0; frame < 4; frame++) {
+        await tester.pump(const Duration(milliseconds: 420));
+      }
+    }
+
+    Future<void> label(String value) => press(find.text(value));
+    await label('설정');
+    await label('시연 새로 시작 · 첫날 18시');
+    await label('새로 시작');
+    await label('먹이기');
+    await label('기본 먹이 1개');
+    await press(find.byKey(const ValueKey('pet-touch-target')));
+    await label('공원 산책');
+    await label('산책하기');
+    await label('집으로');
+    await label('설정');
+    await label('15시간 뒤 재방문');
+    await label('먹이기');
+    await label('기본 먹이 1개');
+    await label('설정');
+    await label('24시간 뒤 재방문');
+    await label('먹이기');
+
+    expect(find.text('위생 위험 예상'), findsOneWidget);
+    expect(find.text('위생 위험'), findsNothing);
+    expect(find.textContaining('예상 배변'), findsNothing);
+    final meals = find.textContaining(RegExp(r'^기본 먹이 [1-3]개$'));
+    final count = meals.evaluate().length;
+    expect(count, greaterThanOrEqualTo(2));
+    expect(meals.hitTestable(), findsNWidgets(count));
+    for (var size = 1; size <= count; size++) {
+      expect(find.text('포만감 ${size + 1}칸'), findsOneWidget);
+    }
+    await label('예상 시간 보기');
+    expect(find.textContaining('방치 시 위생 위험'), findsNWidgets(count));
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
 
   testWidgets('care can interrupt a pending voice reply', (tester) async {
     final voice = _PendingVoice();
@@ -891,7 +954,10 @@ void main() {
         findsOneWidget,
       );
       await press('먹이 주기');
-      final forecast = find.textContaining(RegExp(r'돌보지 않으면 .*위생 악화 위험'));
+      expect(find.text('위생 위험'), findsOneWidget);
+      expect(find.textContaining('예상 배변'), findsNothing);
+      await press('예상 시간 보기');
+      final forecast = find.textContaining(RegExp(r'^방치 시 위생 위험 .*\d:\d\d'));
       await tester.ensureVisible(forecast);
       await tester.pump();
       expect(forecast.hitTestable(), findsOneWidget);

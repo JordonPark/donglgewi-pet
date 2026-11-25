@@ -1432,37 +1432,110 @@ class _PetRoomState extends State<PetRoom> with TickerProviderStateMixin {
     ];
     if (options.isEmpty) return;
     if (_sending) setState(_cancelChatReply);
+    const warningColor = Color(0xff863b22);
+    final allHygieneRisk = options.every((option) => option.$3.risk == '위생 악화');
+    var showTimes = false;
     final choice = await _sheet<({bool apple, int portions})>('먹이 고르기', [
-      if (game.waste > 0) Text('현재 청소할 배변 ${game.waste}개'),
-      for (final (apple, portions, preview) in options)
-        ListTile(
-          contentPadding: EdgeInsets.zero,
-          leading: Icon(apple ? Icons.apple : Icons.rice_bowl),
-          title: Text('${apple ? '사과' : '기본 먹이'} $portions개'),
-          subtitle: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                '포만감 ${preview.fullness}칸 · 공복 ${_mealTime(preview.hungryAt)}',
-              ),
-              Text(
-                '청소 전 예상 배변 ${preview.waste}/3'
-                '${preview.nextWaste == null ? '' : ' · 다음 ${_mealTime(preview.nextWaste!)}'}',
-              ),
-              Text(
-                '돌보지 않으면 ${_mealTime(preview.unattendedDeadline)} · ${preview.risk} 위험',
-                style: TextStyle(
-                  fontWeight: FontWeight.w700,
-                  color: preview.risk == '위생 악화'
-                      ? const Color(0xff863b22)
-                      : ink,
+      StatefulBuilder(
+        builder: (context, setSheetState) => Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            if (allHygieneRisk)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 10),
+                child: Wrap(
+                  spacing: 6,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  children: [
+                    const Icon(
+                      Icons.warning_amber_rounded,
+                      color: warningColor,
+                      size: 18,
+                    ),
+                    const Text(
+                      '위생 위험 예상',
+                      style: TextStyle(color: warningColor),
+                    ),
+                  ],
                 ),
               ),
-            ],
-          ),
-          onTap: () =>
-              Navigator.pop(context, (apple: apple, portions: portions)),
+            for (final (apple, portions, preview) in options)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 6),
+                child: ListTile(
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 12),
+                  horizontalTitleGap: 10,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  tileColor: const Color(0xfff4eee3),
+                  leading: Icon(
+                    apple ? Icons.apple : Icons.rice_bowl,
+                    color: forest,
+                  ),
+                  title: Wrap(
+                    alignment: WrapAlignment.spaceBetween,
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    spacing: 8,
+                    runSpacing: 2,
+                    children: [
+                      Text('${apple ? '사과' : '기본 먹이'} $portions개'),
+                      Text(
+                        '포만감 ${preview.fullness}칸',
+                        style: const TextStyle(
+                          color: forest,
+                          fontSize: 13,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ],
+                  ),
+                  subtitle: showTimes
+                      ? Padding(
+                          padding: const EdgeInsets.only(top: 4, bottom: 6),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text('공복 ${_mealTime(preview.hungryAt)}'),
+                              Text(
+                                '예상 배변 ${preview.waste}/3'
+                                '${preview.nextWaste == null ? '' : ' · 다음 ${_mealTime(preview.nextWaste!)}'}',
+                              ),
+                              Text(
+                                '방치 시 ${preview.risk == '위생 악화' ? '위생 위험' : '굶주림 위험'} ${_mealTime(preview.unattendedDeadline)}',
+                                style: TextStyle(
+                                  fontWeight: FontWeight.w700,
+                                  color: preview.risk == '위생 악화'
+                                      ? warningColor
+                                      : ink,
+                                ),
+                              ),
+                            ],
+                          ),
+                        )
+                      : !allHygieneRisk && preview.risk == '위생 악화'
+                      ? const Text(
+                          '위생 위험',
+                          style: TextStyle(color: warningColor),
+                        )
+                      : null,
+                  onTap: () => Navigator.pop(context, (
+                    apple: apple,
+                    portions: portions,
+                  )),
+                ),
+              ),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton.icon(
+                onPressed: () => setSheetState(() => showTimes = !showTimes),
+                icon: Icon(showTimes ? Icons.expand_less : Icons.expand_more),
+                label: Text(showTimes ? '예상 시간 접기' : '예상 시간 보기'),
+              ),
+            ),
+          ],
         ),
+      ),
     ]);
     if (mounted && choice != null && game == _game) {
       await _feed(choice.apple, portions: choice.portions);
