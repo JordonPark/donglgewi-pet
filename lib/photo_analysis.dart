@@ -34,7 +34,9 @@ class PhotoAnalysis {
       List<String> labels;
       try {
         labels =
-            await _channel.invokeListMethod<String>('analyze', image.path) ??
+            await _channel
+                .invokeListMethod<String>('analyze', image.path)
+                .timeout(const Duration(seconds: 3), onTimeout: () => null) ??
             [];
       } on PlatformException {
         labels = [];
